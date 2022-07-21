@@ -20,7 +20,6 @@
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/gpio/machine.h>
-#include <mach/hardware.h>
 #include <asm/irq.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -28,8 +27,9 @@
 #include <asm/mach/time.h>
 #include <asm/mach-types.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
-#include <mach/time.h>
+
+#include "hardware.h"
+#include "irqs.h"
 #include "gpio-iop32x.h"
 
 /*
@@ -183,6 +183,7 @@ static void __init iq80321_init_machine(void)
 MACHINE_START(IQ80321, "Intel IQ80321")
 	/* Maintainer: Intel Corp. */
 	.atag_offset	= 0x100,
+	.nr_irqs	= IOP32X_NR_IRQS,
 	.map_io		= iq80321_map_io,
 	.init_irq	= iop32x_init_irq,
 	.init_time	= iq80321_timer_init,

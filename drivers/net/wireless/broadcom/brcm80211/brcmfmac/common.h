@@ -50,6 +50,7 @@ struct brcmf_mp_device {
 	bool		ignore_probe_fail;
 	struct brcmfmac_pd_cc *country_codes;
 	const char	*board_type;
+	unsigned char	mac[ETH_ALEN];
 	union {
 		struct brcmfmac_sdio_pd sdio;
 	} bus;
@@ -71,5 +72,9 @@ void brcmf_dmi_probe(struct brcmf_mp_device *settings, u32 chip, u32 chiprev);
 static inline void
 brcmf_dmi_probe(struct brcmf_mp_device *settings, u32 chip, u32 chiprev) {}
 #endif
+
+u8 brcmf_map_prio_to_prec(void *cfg, u8 prio);
+
+u8 brcmf_map_prio_to_aci(void *cfg, u8 prio);
 
 #endif /* BRCMFMAC_COMMON_H */

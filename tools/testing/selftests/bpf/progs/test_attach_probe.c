@@ -3,50 +3,94 @@
 
 #include <linux/ptrace.h>
 #include <linux/bpf.h>
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include "bpf_misc.h"
 
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 4);
-	__type(key, int);
-	__type(value, int);
-} results_map SEC(".maps");
+int kprobe_res = 0;
+int kprobe2_res = 0;
+int kretprobe_res = 0;
+int kretprobe2_res = 0;
+int uprobe_res = 0;
+int uretprobe_res = 0;
+int uprobe_byname_res = 0;
+int uretprobe_byname_res = 0;
+int uprobe_byname2_res = 0;
+int uretprobe_byname2_res = 0;
 
-SEC("kprobe/sys_nanosleep")
-int handle_sys_nanosleep_entry(struct pt_regs *ctx)
+SEC("kprobe")
+int handle_kprobe(struct pt_regs *ctx)
 {
-	const int key = 0, value = 1;
-
-	bpf_map_update_elem(&results_map, &key, &value, 0);
+	kprobe_res = 1;
 	return 0;
 }
 
-SEC("kretprobe/sys_nanosleep")
-int handle_sys_getpid_return(struct pt_regs *ctx)
+SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
+int BPF_KPROBE(handle_kprobe_auto)
 {
-	const int key = 1, value = 2;
-
-	bpf_map_update_elem(&results_map, &key, &value, 0);
+	kprobe2_res = 11;
 	return 0;
 }
 
-SEC("uprobe/trigger_func")
-int handle_uprobe_entry(struct pt_regs *ctx)
+SEC("kretprobe")
+int handle_kretprobe(struct pt_regs *ctx)
 {
-	const int key = 2, value = 3;
-
-	bpf_map_update_elem(&results_map, &key, &value, 0);
+	kretprobe_res = 2;
 	return 0;
 }
 
-SEC("uretprobe/trigger_func")
-int handle_uprobe_return(struct pt_regs *ctx)
+SEC("kretprobe/" SYS_PREFIX "sys_nanosleep")
+int BPF_KRETPROBE(handle_kretprobe_auto)
 {
-	const int key = 3, value = 4;
+	kretprobe2_res = 22;
+	return 0;
+}
 
-	bpf_map_update_elem(&results_map, &key, &value, 0);
+SEC("uprobe")
+int handle_uprobe(struct pt_regs *ctx)
+{
+	uprobe_res = 3;
+	return 0;
+}
+
+SEC("uretprobe")
+int handle_uretprobe(struct pt_regs *ctx)
+{
+	uretprobe_res = 4;
+	return 0;
+}
+
+SEC("uprobe")
+int handle_uprobe_byname(struct pt_regs *ctx)
+{
+	uprobe_byname_res = 5;
+	return 0;
+}
+
+/* use auto-attach format for section definition. */
+SEC("uretprobe//proc/self/exe:trigger_func2")
+int handle_uretprobe_byname(struct pt_regs *ctx)
+{
+	uretprobe_byname_res = 6;
+	return 0;
+}
+
+SEC("uprobe")
+int handle_uprobe_byname2(struct pt_regs *ctx)
+{
+	unsigned int size = PT_REGS_PARM1(ctx);
+
+	/* verify malloc size */
+	if (size == 1)
+		uprobe_byname2_res = 7;
+	return 0;
+}
+
+SEC("uretprobe")
+int handle_uretprobe_byname2(struct pt_regs *ctx)
+{
+	uretprobe_byname2_res = 8;
 	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
-__u32 _version SEC("version") = 1;

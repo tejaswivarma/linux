@@ -46,7 +46,7 @@
 		      <0xff113000 0x1000>;
 	};
 
-	intc: intc@fffed000 {
+	intc: interrupt-controller@fffed000 {
 		compatible = "arm,cortex-a9-gic";
 		#interrupt-cells = <3>;
 		interrupt-controller;
@@ -80,11 +80,10 @@
 					     <0 110 4>,
 					     <0 111 4>;
 				#dma-cells = <1>;
-				#dma-channels = <8>;
-				#dma-requests = <32>;
 				clocks = <&l4_main_clk>;
 				clock-names = "apb_pclk";
 				resets = <&rst DMA_RESET>;
+				reset-names = "dma";
 			};
 		};
 
@@ -530,6 +529,7 @@
 			reg = <0xff400000 0x100000>;
 			resets = <&rst LWHPS2FPGA_RESET>;
 			clocks = <&l4_main_clk>;
+			status = "disabled";
 		};
 
 		fpga_bridge1: fpga_bridge@ff500000 {
@@ -537,6 +537,21 @@
 			reg = <0xff500000 0x10000>;
 			resets = <&rst HPS2FPGA_RESET>;
 			clocks = <&l4_main_clk>;
+			status = "disabled";
+		};
+
+		fpga_bridge2: fpga-bridge@ff600000 {
+			compatible = "altr,socfpga-fpga2hps-bridge";
+			reg = <0xff600000 0x100000>;
+			resets = <&rst FPGA2HPS_RESET>;
+			clocks = <&l4_main_clk>;
+			status = "disabled";
+		};
+
+		fpga_bridge3: fpga-bridge@ffc25080 {
+			compatible = "altr,socfpga-fpga2sdram-bridge";
+			reg = <0xffc25080 0x4>;
+			status = "disabled";
 		};
 
 		fpgamgr0: fpgamgr@ff706000 {
@@ -709,7 +724,7 @@
 			};
 		};
 
-		L2: l2-cache@fffef000 {
+		L2: cache-controller@fffef000 {
 			compatible = "arm,pl310-cache";
 			reg = <0xfffef000 0x1000>;
 			interrupts = <0 38 0x04>;
@@ -747,7 +762,7 @@
 
 		nand0: nand@ff900000 {
 			#address-cells = <0x1>;
-			#size-cells = <0x1>;
+			#size-cells = <0x0>;
 			compatible = "altr,socfpga-denali-nand";
 			reg = <0xff900000 0x100000>,
 			      <0xffb80000 0x10000>;
@@ -765,7 +780,7 @@
 		};
 
 		qspi: spi@ff705000 {
-			compatible = "cdns,qspi-nor";
+			compatible = "intel,socfpga-qspi", "cdns,qspi-nor";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <0xff705000 0x1000>,
@@ -812,6 +827,7 @@
 			num-cs = <4>;
 			clocks = <&spi_m_clk>;
 			resets = <&rst SPIM0_RESET>;
+			reset-names = "spi";
 			status = "disabled";
 		};
 
@@ -824,6 +840,7 @@
 			num-cs = <4>;
 			clocks = <&spi_m_clk>;
 			resets = <&rst SPIM1_RESET>;
+			reset-names = "spi";
 			status = "disabled";
 		};
 

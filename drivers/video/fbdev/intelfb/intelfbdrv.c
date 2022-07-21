@@ -193,7 +193,7 @@ static const struct pci_device_id intelfb_pci_table[] = {
 static int num_registered = 0;
 
 /* fb ops */
-static struct fb_ops intel_fb_ops = {
+static const struct fb_ops intel_fb_ops = {
 	.owner =		THIS_MODULE,
 	.fb_open =              intelfb_open,
 	.fb_release =           intelfb_release,
@@ -472,7 +472,7 @@ static int intelfb_pci_register(struct pci_dev *pdev,
 	struct fb_info *info;
 	struct intelfb_info *dinfo;
 	int i, err, dvo;
-	int aperture_size, stolen_size;
+	int aperture_size, stolen_size = 0;
 	struct agp_kern_info gtt_info;
 	int agp_memtype;
 	const char *s;
@@ -571,7 +571,7 @@ static int intelfb_pci_register(struct pci_dev *pdev,
 		return -ENODEV;
 	}
 
-	if (intelfbhw_get_memory(pdev, &aperture_size,&stolen_size)) {
+	if (intelfbhw_get_memory(pdev, &aperture_size, &stolen_size)) {
 		cleanup(dinfo);
 		return -ENODEV;
 	}
@@ -654,7 +654,7 @@ static int intelfb_pci_register(struct pci_dev *pdev,
 	}
 
 	dinfo->mmio_base =
-		(u8 __iomem *)ioremap_nocache(dinfo->mmio_base_phys,
+		(u8 __iomem *)ioremap(dinfo->mmio_base_phys,
 					      INTEL_REG_SIZE);
 	if (!dinfo->mmio_base) {
 		ERR_MSG("Cannot remap MMIO region.\n");

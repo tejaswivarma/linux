@@ -167,7 +167,7 @@ SOC_DOUBLE("Polarity Invert Switch", WM8737_ADC_CONTROL, 5, 6, 1, 0),
 SOC_SINGLE("3D Switch", WM8737_3D_ENHANCE, 0, 1, 0),
 SOC_SINGLE("3D Depth", WM8737_3D_ENHANCE, 1, 15, 0),
 SOC_ENUM("3D Low Cut-off", low_3d),
-SOC_ENUM("3D High Cut-off", low_3d),
+SOC_ENUM("3D High Cut-off", high_3d),
 SOC_SINGLE_TLV("3D ADC Volume", WM8737_3D_ENHANCE, 7, 1, 1, adc_tlv),
 
 SOC_SINGLE("Noise Gate Switch", WM8737_NOISE_GATE, 0, 1, 0),
@@ -606,8 +606,7 @@ static const struct regmap_config wm8737_regmap = {
 };
 
 #if IS_ENABLED(CONFIG_I2C)
-static int wm8737_i2c_probe(struct i2c_client *i2c,
-			    const struct i2c_device_id *id)
+static int wm8737_i2c_probe(struct i2c_client *i2c)
 {
 	struct wm8737_priv *wm8737;
 	int ret, i;
@@ -651,7 +650,7 @@ static struct i2c_driver wm8737_i2c_driver = {
 		.name = "wm8737",
 		.of_match_table = wm8737_of_match,
 	},
-	.probe =    wm8737_i2c_probe,
+	.probe_new = wm8737_i2c_probe,
 	.id_table = wm8737_i2c_id,
 };
 #endif

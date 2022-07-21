@@ -8,6 +8,7 @@
 
 #include <net/mac80211.h>
 #include <linux/sched.h>
+#include <linux/jiffies.h>
 #include "queue.h"
 #include "cw1200.h"
 #include "debug.h"
@@ -79,10 +80,9 @@ static void cw1200_queue_register_post_gc(struct list_head *gc_list,
 					  struct cw1200_queue_item *item)
 {
 	struct cw1200_queue_item *gc_item;
-	gc_item = kmalloc(sizeof(struct cw1200_queue_item),
+	gc_item = kmemdup(item, sizeof(struct cw1200_queue_item),
 			GFP_ATOMIC);
 	BUG_ON(!gc_item);
-	memcpy(gc_item, item, sizeof(struct cw1200_queue_item));
 	list_add_tail(&gc_item->head, gc_list);
 }
 
@@ -95,7 +95,7 @@ static void __cw1200_queue_gc(struct cw1200_queue *queue,
 	bool wakeup_stats = false;
 
 	list_for_each_entry_safe(item, tmp, &queue->queue, head) {
-		if (jiffies - item->queue_timestamp < queue->ttl)
+		if (time_is_after_jiffies(item->queue_timestamp + queue->ttl))
 			break;
 		--queue->num_queued;
 		--queue->link_map_cache[item->txpriv.link_id];

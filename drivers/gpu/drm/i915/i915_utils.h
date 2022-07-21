@@ -28,26 +28,50 @@
 #include <linux/list.h>
 #include <linux/overflow.h>
 #include <linux/sched.h>
+#include <linux/string_helpers.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
+#include <linux/sched/clock.h>
 
-#undef WARN_ON
-/* Many gcc seem to no see through this and fall over :( */
-#if 0
-#define WARN_ON(x) ({ \
-	bool __i915_warn_cond = (x); \
-	if (__builtin_constant_p(__i915_warn_cond)) \
-		BUILD_BUG_ON(__i915_warn_cond); \
-	WARN(__i915_warn_cond, "WARN_ON(" #x ")"); })
-#else
-#define WARN_ON(x) WARN((x), "%s", "WARN_ON(" __stringify(x) ")")
+#ifdef CONFIG_X86
+#include <asm/hypervisor.h>
 #endif
 
-#undef WARN_ON_ONCE
-#define WARN_ON_ONCE(x) WARN_ONCE((x), "%s", "WARN_ON_ONCE(" __stringify(x) ")")
+struct drm_i915_private;
+struct timer_list;
+
+#define FDO_BUG_URL "https://gitlab.freedesktop.org/drm/intel/-/wikis/How-to-file-i915-bugs"
 
 #define MISSING_CASE(x) WARN(1, "Missing case (%s == %ld)\n", \
 			     __stringify(x), (long)(x))
+
+void __printf(3, 4)
+__i915_printk(struct drm_i915_private *dev_priv, const char *level,
+	      const char *fmt, ...);
+
+#define i915_report_error(dev_priv, fmt, ...)				   \
+	__i915_printk(dev_priv, KERN_ERR, fmt, ##__VA_ARGS__)
+
+#if IS_ENABLED(CONFIG_DRM_I915_DEBUG)
+
+int __i915_inject_probe_error(struct drm_i915_private *i915, int err,
+			      const char *func, int line);
+#define i915_inject_probe_error(_i915, _err) \
+	__i915_inject_probe_error((_i915), (_err), __func__, __LINE__)
+bool i915_error_injected(void);
+
+#else
+
+#define i915_inject_probe_error(i915, e) ({ BUILD_BUG_ON_INVALID(i915); 0; })
+#define i915_error_injected() false
+
+#endif
+
+#define i915_inject_probe_failure(i915) i915_inject_probe_error((i915), -ENODEV)
+
+#define i915_probe_error(i915, fmt, ...)				   \
+	__i915_printk(i915, i915_error_injected() ? KERN_DEBUG : KERN_ERR, \
+		      fmt, ##__VA_ARGS__)
 
 #if defined(GCC_VERSION) && GCC_VERSION >= 70000
 #define add_overflows_t(T, A, B) \
@@ -69,11 +93,23 @@
 	typeof(max) max__ = (max); \
 	(void)(&start__ == &size__); \
 	(void)(&start__ == &max__); \
-	start__ > max__ || size__ > max__ - start__; \
+	start__ >= max__ || size__ > max__ - start__; \
 })
 
 #define range_overflows_t(type, start, size, max) \
 	range_overflows((type)(start), (type)(size), (type)(max))
+
+#define range_overflows_end(start, size, max) ({ \
+	typeof(start) start__ = (start); \
+	typeof(size) size__ = (size); \
+	typeof(max) max__ = (max); \
+	(void)(&start__ == &size__); \
+	(void)(&start__ == &max__); \
+	start__ > max__ || size__ > max__ - start__; \
+})
+
+#define range_overflows_end_t(type, start, size, max) \
+	range_overflows_end((type)(start), (type)(size), (type)(max))
 
 /* Note we don't consider signbits :| */
 #define overflows_type(x, T) \
@@ -131,6 +167,16 @@ __check_struct_size(size_t base, size_t arr, size_t count, size_t *size)
 	((typeof(ptr))((unsigned long)(ptr) | __bits));			\
 })
 
+#define ptr_dec(ptr) ({							\
+	unsigned long __v = (unsigned long)(ptr);			\
+	(typeof(ptr))(__v - 1);						\
+})
+
+#define ptr_inc(ptr) ({							\
+	unsigned long __v = (unsigned long)(ptr);			\
+	(typeof(ptr))(__v + 1);						\
+})
+
 #define page_mask_bits(ptr) ptr_mask_bits(ptr, PAGE_SHIFT)
 #define page_unmask_bits(ptr) ptr_unmask_bits(ptr, PAGE_SHIFT)
 #define page_pack_bits(ptr, bits) ptr_pack_bits(ptr, bits, PAGE_SHIFT)
@@ -145,6 +191,11 @@ __check_struct_size(size_t base, size_t arr, size_t count, size_t *size)
 	*(ptr) = (typeof(*ptr))0;					\
 	__T;								\
 })
+
+static __always_inline ptrdiff_t ptrdiff(const void *a, const void *b)
+{
+	return a - b;
+}
 
 /*
  * container_of_user: Extract the superclass from a pointer to a member.
@@ -193,6 +244,11 @@ static inline u64 ptr_to_u64(const void *ptr)
 	__idx;								\
 })
 
+static inline bool is_power_of_2_u64(u64 n)
+{
+	return (n != 0 && ((n & (n - 1)) == 0));
+}
+
 static inline void __list_del_many(struct list_head *head,
 				   struct list_head *first)
 {
@@ -200,17 +256,10 @@ static inline void __list_del_many(struct list_head *head,
 	WRITE_ONCE(head->next, first);
 }
 
-/*
- * Wait until the work is finally complete, even if it tries to postpone
- * by requeueing itself. Note, that if the worker never cancels itself,
- * we will spin forever.
- */
-static inline void drain_delayed_work(struct delayed_work *dw)
+static inline int list_is_last_rcu(const struct list_head *list,
+				   const struct list_head *head)
 {
-	do {
-		while (flush_delayed_work(dw))
-			;
-	} while (delayed_work_pending(dw));
+	return READ_ONCE(list->next) == head;
 }
 
 static inline unsigned long msecs_to_jiffies_timeout(const unsigned int m)
@@ -355,19 +404,41 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
 #define MBps(x) KBps(1000 * (x))
 #define GBps(x) ((u64)1000 * MBps((x)))
 
-static inline const char *yesno(bool v)
+void add_taint_for_CI(struct drm_i915_private *i915, unsigned int taint);
+static inline void __add_taint_for_CI(unsigned int taint)
 {
-	return v ? "yes" : "no";
+	/*
+	 * The system is "ok", just about surviving for the user, but
+	 * CI results are now unreliable as the HW is very suspect.
+	 * CI checks the taint state after every test and will reboot
+	 * the machine if the kernel is tainted.
+	 */
+	add_taint(taint, LOCKDEP_STILL_OK);
 }
 
-static inline const char *onoff(bool v)
+void cancel_timer(struct timer_list *t);
+void set_timer_ms(struct timer_list *t, unsigned long timeout);
+
+static inline bool timer_active(const struct timer_list *t)
 {
-	return v ? "on" : "off";
+	return READ_ONCE(t->expires);
 }
 
-static inline const char *enableddisabled(bool v)
+static inline bool timer_expired(const struct timer_list *t)
 {
-	return v ? "enabled" : "disabled";
+	return timer_active(t) && !timer_pending(t);
 }
+
+static inline bool i915_run_as_guest(void)
+{
+#if IS_ENABLED(CONFIG_X86)
+	return !hypervisor_is_type(X86_HYPER_NATIVE);
+#else
+	/* Not supported yet */
+	return false;
+#endif
+}
+
+bool i915_vtd_active(struct drm_i915_private *i915);
 
 #endif /* !__I915_UTILS_H */

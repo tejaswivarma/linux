@@ -22,7 +22,6 @@
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/gpio/machine.h>
-#include <mach/hardware.h>
 #include <asm/irq.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -30,8 +29,10 @@
 #include <asm/mach/time.h>
 #include <asm/mach-types.h>
 #include <asm/page.h>
-#include <mach/time.h>
+
+#include "hardware.h"
 #include "gpio-iop32x.h"
+#include "irqs.h"
 
 /*
  * GLAN Tank timer tick configuration.
@@ -204,6 +205,7 @@ static void __init glantank_init_machine(void)
 MACHINE_START(GLANTANK, "GLAN Tank")
 	/* Maintainer: Lennert Buytenhek <buytenh@wantstofly.org> */
 	.atag_offset	= 0x100,
+	.nr_irqs	= IOP32X_NR_IRQS,
 	.map_io		= glantank_map_io,
 	.init_irq	= iop32x_init_irq,
 	.init_time	= glantank_timer_init,

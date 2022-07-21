@@ -218,7 +218,6 @@ static int
 cc2520_cmd_strobe(struct cc2520_private *priv, u8 cmd)
 {
 	int ret;
-	u8 status = 0xff;
 	struct spi_message msg;
 	struct spi_transfer xfer = {
 		.len = 0,
@@ -236,8 +235,6 @@ cc2520_cmd_strobe(struct cc2520_private *priv, u8 cmd)
 		 priv->buf[0]);
 
 	ret = spi_sync(priv->spi, &msg);
-	if (!ret)
-		status = priv->buf[0];
 	dev_vdbg(&priv->spi->dev,
 		 "buf[0] = %02x\n", priv->buf[0]);
 	mutex_unlock(&priv->buffer_mutex);
@@ -1216,7 +1213,7 @@ err_hw_init:
 	return ret;
 }
 
-static int cc2520_remove(struct spi_device *spi)
+static void cc2520_remove(struct spi_device *spi)
 {
 	struct cc2520_private *priv = spi_get_drvdata(spi);
 
@@ -1225,8 +1222,6 @@ static int cc2520_remove(struct spi_device *spi)
 
 	ieee802154_unregister_hw(priv->hw);
 	ieee802154_free_hw(priv->hw);
-
-	return 0;
 }
 
 static const struct spi_device_id cc2520_ids[] = {
