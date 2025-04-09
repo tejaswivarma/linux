@@ -85,14 +85,17 @@ struct task_struct___old {
 } __attribute__((preserve_access_index));
 
 int enabled = 0;
-int has_cpu = 0;
-int has_task = 0;
-int has_cgroup = 0;
-int uses_tgid = 0;
+
+const volatile int has_cpu = 0;
+const volatile int has_task = 0;
+const volatile int has_cgroup = 0;
+const volatile int uses_tgid = 0;
 
 const volatile bool has_prev_state = false;
 const volatile bool needs_cgroup = false;
 const volatile bool uses_cgroup_v1 = false;
+
+int perf_subsys_id = -1;
 
 /*
  * Old kernel used to call it task_struct->state and now it's '__state'.
@@ -119,11 +122,19 @@ static inline __u64 get_cgroup_id(struct task_struct *t)
 {
 	struct cgroup *cgrp;
 
-	if (uses_cgroup_v1)
-		cgrp = BPF_CORE_READ(t, cgroups, subsys[perf_event_cgrp_id], cgroup);
-	else
-		cgrp = BPF_CORE_READ(t, cgroups, dfl_cgrp);
+	if (!uses_cgroup_v1)
+		return BPF_CORE_READ(t, cgroups, dfl_cgrp, kn, id);
 
+	if (perf_subsys_id == -1) {
+#if __has_builtin(__builtin_preserve_enum_value)
+		perf_subsys_id = bpf_core_enum_value(enum cgroup_subsys_id,
+						     perf_event_cgrp_id);
+#else
+		perf_subsys_id = perf_event_cgrp_id;
+#endif
+	}
+
+	cgrp = BPF_CORE_READ(t, cgroups, subsys[perf_subsys_id], cgroup);
 	return BPF_CORE_READ(cgrp, kn, id);
 }
 
@@ -267,7 +278,7 @@ int on_switch(u64 *ctx)
 	else
 		prev_state = get_task_state(prev);
 
-	return off_cpu_stat(ctx, prev, next, prev_state);
+	return off_cpu_stat(ctx, prev, next, prev_state & 0xff);
 }
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

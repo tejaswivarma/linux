@@ -252,12 +252,6 @@ static enum power_supply_property ab8500_chargalg_props[] = {
 	POWER_SUPPLY_PROP_HEALTH,
 };
 
-struct ab8500_chargalg_sysfs_entry {
-	struct attribute attr;
-	ssize_t (*show)(struct ab8500_chargalg *di, char *buf);
-	ssize_t (*store)(struct ab8500_chargalg *di, const char *buf, size_t length);
-};
-
 /**
  * ab8500_chargalg_safety_timer_expired() - Expiration of the safety timer
  * @timer:     pointer to the hrtimer structure
@@ -490,8 +484,6 @@ static int ab8500_chargalg_kick_watchdog(struct ab8500_chargalg *di)
 static int ab8500_chargalg_ac_en(struct ab8500_chargalg *di, int enable,
 	int vset_uv, int iset_ua)
 {
-	static int ab8500_chargalg_ex_ac_enable_toggle;
-
 	if (!di->ac_chg || !di->ac_chg->ops.enable)
 		return -ENXIO;
 
@@ -852,10 +844,9 @@ static void handle_maxim_chg_curr(struct ab8500_chargalg *di)
 	}
 }
 
-static int ab8500_chargalg_get_ext_psy_data(struct device *dev, void *data)
+static int ab8500_chargalg_get_ext_psy_data(struct power_supply *ext, void *data)
 {
 	struct power_supply *psy;
-	struct power_supply *ext = dev_get_drvdata(dev);
 	const char **supplicants = (const char **)ext->supplied_to;
 	struct ab8500_chargalg *di;
 	union power_supply_propval ret;
@@ -1233,14 +1224,13 @@ static bool ab8500_chargalg_time_to_restart(struct ab8500_chargalg *di)
  */
 static void ab8500_chargalg_algorithm(struct ab8500_chargalg *di)
 {
+	const struct power_supply_maintenance_charge_table *mt;
 	struct power_supply_battery_info *bi = di->bm->bi;
-	struct power_supply_maintenance_charge_table *mt;
 	int charger_status;
 	int ret;
 
 	/* Collect data from all power_supply class devices */
-	class_for_each_device(power_supply_class, NULL,
-		di->chargalg_psy, ab8500_chargalg_get_ext_psy_data);
+	power_supply_for_each_psy(di->chargalg_psy, ab8500_chargalg_get_ext_psy_data);
 
 	ab8500_chargalg_end_of_charge(di);
 	ab8500_chargalg_check_temp(di);
@@ -1728,7 +1718,7 @@ static char *supply_interface[] = {
 
 static const struct power_supply_desc ab8500_chargalg_desc = {
 	.name			= "ab8500_chargalg",
-	.type			= POWER_SUPPLY_TYPE_BATTERY,
+	.type			= POWER_SUPPLY_TYPE_UNKNOWN,
 	.properties		= ab8500_chargalg_props,
 	.num_properties		= ARRAY_SIZE(ab8500_chargalg_props),
 	.get_property		= ab8500_chargalg_get_property,
@@ -1797,13 +1787,12 @@ static int ab8500_chargalg_probe(struct platform_device *pdev)
 	psy_cfg.drv_data = di;
 
 	/* Initilialize safety timer */
-	hrtimer_init(&di->safety_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	di->safety_timer.function = ab8500_chargalg_safety_timer_expired;
+	hrtimer_setup(&di->safety_timer, ab8500_chargalg_safety_timer_expired, CLOCK_MONOTONIC,
+		      HRTIMER_MODE_REL);
 
 	/* Initilialize maintenance timer */
-	hrtimer_init(&di->maintenance_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	di->maintenance_timer.function =
-		ab8500_chargalg_maintenance_timer_expired;
+	hrtimer_setup(&di->maintenance_timer, ab8500_chargalg_maintenance_timer_expired,
+		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
 	/* Init work for chargalg */
 	INIT_DEFERRABLE_WORK(&di->chargalg_periodic_work,
@@ -1832,11 +1821,9 @@ static int ab8500_chargalg_probe(struct platform_device *pdev)
 	return component_add(dev, &ab8500_chargalg_component_ops);
 }
 
-static int ab8500_chargalg_remove(struct platform_device *pdev)
+static void ab8500_chargalg_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &ab8500_chargalg_component_ops);
-
-	return 0;
 }
 
 static SIMPLE_DEV_PM_OPS(ab8500_chargalg_pm_ops, ab8500_chargalg_suspend, ab8500_chargalg_resume);

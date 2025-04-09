@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only or BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 %YAML 1.2
 ---
 $id: http://devicetree.org/schemas/hwmon/national,lm90.yaml#
@@ -32,6 +32,9 @@ properties:
       - national,lm89
       - national,lm90
       - national,lm99
+      - nuvoton,nct7716
+      - nuvoton,nct7717
+      - nuvoton,nct7718
       - nxp,sa56004
       - onnn,nct1008
       - ti,tmp451
@@ -120,6 +123,8 @@ allOf:
               - dallas,max6659
               - dallas,max6695
               - dallas,max6696
+              - nuvoton,nct7716
+              - nuvoton,nct7717
     then:
       patternProperties:
         "^channel@([0-2])$":
@@ -155,6 +160,7 @@ allOf:
               - national,lm89
               - national,lm90
               - national,lm99
+              - nuvoton,nct7718
               - nxp,sa56004
               - winbond,w83l771
     then:
@@ -198,30 +204,30 @@ examples:
     };
   - |
     i2c {
-      #address-cells = <1>;
-      #size-cells = <0>;
-
-      sensor@4c {
-        compatible = "adi,adt7481";
-        reg = <0x4c>;
         #address-cells = <1>;
         #size-cells = <0>;
 
-        channel@0 {
-          reg = <0x0>;
-          label = "local";
-        };
+        sensor@4c {
+            compatible = "adi,adt7481";
+            reg = <0x4c>;
+            #address-cells = <1>;
+            #size-cells = <0>;
 
-        channel@1 {
-          reg = <0x1>;
-          label = "front";
-          temperature-offset-millicelsius = <4000>;
-        };
+            channel@0 {
+                reg = <0x0>;
+                label = "local";
+            };
 
-        channel@2 {
-          reg = <0x2>;
-          label = "back";
-          temperature-offset-millicelsius = <750>;
+            channel@1 {
+                reg = <0x1>;
+                label = "front";
+                temperature-offset-millicelsius = <4000>;
+            };
+
+            channel@2 {
+                reg = <0x2>;
+                label = "back";
+                temperature-offset-millicelsius = <750>;
+            };
         };
-      };
     };

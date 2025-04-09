@@ -157,11 +157,8 @@ arch___change_bit(unsigned long nr, volatile unsigned long *addr)
 	change_bit(nr, addr);
 }
 
-static __always_inline bool
-arch_test_bit(unsigned long nr, const volatile unsigned long *addr)
-{
-	return (addr[nr >> 5] & (1UL << (nr & 31))) != 0;
-}
+#define arch_test_bit generic_test_bit
+#define arch_test_bit_acquire generic_test_bit_acquire
 
 static inline int bset_reg_test_and_set_bit(int nr,
 					    volatile unsigned long *vaddr)
@@ -320,6 +317,27 @@ static __always_inline bool
 arch___test_and_change_bit(unsigned long nr, volatile unsigned long *addr)
 {
 	return test_and_change_bit(nr, addr);
+}
+
+static inline bool xor_unlock_is_negative_byte(unsigned long mask,
+		volatile unsigned long *p)
+{
+#ifdef CONFIG_COLDFIRE
+	__asm__ __volatile__ ("eorl %1, %0"
+		: "+m" (*p)
+		: "d" (mask)
+		: "memory");
+	return *p & (1 << 7);
+#else
+	char result;
+	char *cp = (char *)p + 3;	/* m68k is big-endian */
+
+	__asm__ __volatile__ ("eor.b %1, %2; smi %0"
+		: "=d" (result)
+		: "di" (mask), "o" (*cp)
+		: "memory");
+	return result;
+#endif
 }
 
 /*

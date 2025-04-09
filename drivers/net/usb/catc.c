@@ -672,8 +672,8 @@ static void catc_get_drvinfo(struct net_device *dev,
 			     struct ethtool_drvinfo *info)
 {
 	struct catc *catc = netdev_priv(dev);
-	strlcpy(info->driver, driver_name, sizeof(info->driver));
-	strlcpy(info->version, DRIVER_VERSION, sizeof(info->version));
+	strscpy(info->driver, driver_name, sizeof(info->driver));
+	strscpy(info->version, DRIVER_VERSION, sizeof(info->version));
 	usb_make_path(catc->usbdev, info->bus_info, sizeof(info->bus_info));
 }
 
@@ -738,7 +738,7 @@ static int catc_stop(struct net_device *netdev)
 	netif_stop_queue(netdev);
 
 	if (!catc->is_f5u011)
-		del_timer_sync(&catc->timer);
+		timer_delete_sync(&catc->timer);
 
 	usb_kill_urb(catc->rx_urb);
 	usb_kill_urb(catc->tx_urb);

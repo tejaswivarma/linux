@@ -202,6 +202,11 @@ static ssize_t bpf_seq_read(struct file *file, char __user *buf, size_t size,
 	}
 stop:
 	offs = seq->count;
+	if (IS_ERR(p)) {
+		seq->op->stop(seq, NULL);
+		err = PTR_ERR(p);
+		goto done;
+	}
 	/* bpf program called if !p */
 	seq->op->stop(seq, p);
 	if (!p) {
@@ -278,7 +283,6 @@ static int iter_release(struct inode *inode, struct file *file)
 
 const struct file_operations bpf_iter_fops = {
 	.open		= iter_open,
-	.llseek		= no_llseek,
 	.read		= bpf_seq_read,
 	.release	= iter_release,
 };
@@ -331,7 +335,7 @@ static void cache_btf_id(struct bpf_iter_target_info *tinfo,
 	tinfo->btf_id = prog->aux->attach_btf_id;
 }
 
-bool bpf_iter_prog_supported(struct bpf_prog *prog)
+int bpf_iter_prog_supported(struct bpf_prog *prog)
 {
 	const char *attach_fname = prog->aux->attach_func_name;
 	struct bpf_iter_target_info *tinfo = NULL, *iter;
@@ -340,7 +344,7 @@ bool bpf_iter_prog_supported(struct bpf_prog *prog)
 	int prefix_len = strlen(prefix);
 
 	if (strncmp(attach_fname, prefix, prefix_len))
-		return false;
+		return -EINVAL;
 
 	mutex_lock(&targets_mutex);
 	list_for_each_entry(iter, &targets, list) {
@@ -356,12 +360,11 @@ bool bpf_iter_prog_supported(struct bpf_prog *prog)
 	}
 	mutex_unlock(&targets_mutex);
 
-	if (tinfo) {
-		prog->aux->ctx_arg_info_size = tinfo->reg_info->ctx_arg_info_size;
-		prog->aux->ctx_arg_info = tinfo->reg_info->ctx_arg_info;
-	}
+	if (!tinfo)
+		return -EINVAL;
 
-	return tinfo != NULL;
+	return bpf_prog_ctx_arg_info_init(prog, tinfo->reg_info->ctx_arg_info,
+					  tinfo->reg_info->ctx_arg_info_size);
 }
 
 const struct bpf_func_proto *
@@ -543,7 +546,7 @@ int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 		return -ENOENT;
 
 	/* Only allow sleepable program for resched-able iterator */
-	if (prog->aux->sleepable && !bpf_iter_target_support_resched(tinfo))
+	if (prog->sleepable && !bpf_iter_target_support_resched(tinfo))
 		return -EINVAL;
 
 	link = kzalloc(sizeof(*link), GFP_USER | __GFP_NOWARN);
@@ -689,19 +692,24 @@ struct bpf_prog *bpf_iter_get_info(struct bpf_iter_meta *meta, bool in_stop)
 
 int bpf_iter_run_prog(struct bpf_prog *prog, void *ctx)
 {
+	struct bpf_run_ctx run_ctx, *old_run_ctx;
 	int ret;
 
-	if (prog->aux->sleepable) {
+	if (prog->sleepable) {
 		rcu_read_lock_trace();
 		migrate_disable();
 		might_fault();
+		old_run_ctx = bpf_set_run_ctx(&run_ctx);
 		ret = bpf_prog_run(prog, ctx);
+		bpf_reset_run_ctx(old_run_ctx);
 		migrate_enable();
 		rcu_read_unlock_trace();
 	} else {
 		rcu_read_lock();
 		migrate_disable();
+		old_run_ctx = bpf_set_run_ctx(&run_ctx);
 		ret = bpf_prog_run(prog, ctx);
+		bpf_reset_run_ctx(old_run_ctx);
 		migrate_enable();
 		rcu_read_unlock();
 	}
@@ -766,3 +774,69 @@ const struct bpf_func_proto bpf_loop_proto = {
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,
 };
+
+struct bpf_iter_num_kern {
+	int cur; /* current value, inclusive */
+	int end; /* final value, exclusive */
+} __aligned(8);
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_iter_num_new(struct bpf_iter_num *it, int start, int end)
+{
+	struct bpf_iter_num_kern *s = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_num_kern) != sizeof(struct bpf_iter_num));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_num_kern) != __alignof__(struct bpf_iter_num));
+
+	/* start == end is legit, it's an empty range and we'll just get NULL
+	 * on first (and any subsequent) bpf_iter_num_next() call
+	 */
+	if (start > end) {
+		s->cur = s->end = 0;
+		return -EINVAL;
+	}
+
+	/* avoid overflows, e.g., if start == INT_MIN and end == INT_MAX */
+	if ((s64)end - (s64)start > BPF_MAX_LOOPS) {
+		s->cur = s->end = 0;
+		return -E2BIG;
+	}
+
+	/* user will call bpf_iter_num_next() first,
+	 * which will set s->cur to exactly start value;
+	 * underflow shouldn't matter
+	 */
+	s->cur = start - 1;
+	s->end = end;
+
+	return 0;
+}
+
+__bpf_kfunc int *bpf_iter_num_next(struct bpf_iter_num* it)
+{
+	struct bpf_iter_num_kern *s = (void *)it;
+
+	/* check failed initialization or if we are done (same behavior);
+	 * need to be careful about overflow, so convert to s64 for checks,
+	 * e.g., if s->cur == s->end == INT_MAX, we can't just do
+	 * s->cur + 1 >= s->end
+	 */
+	if ((s64)(s->cur + 1) >= s->end) {
+		s->cur = s->end = 0;
+		return NULL;
+	}
+
+	s->cur++;
+
+	return &s->cur;
+}
+
+__bpf_kfunc void bpf_iter_num_destroy(struct bpf_iter_num *it)
+{
+	struct bpf_iter_num_kern *s = (void *)it;
+
+	s->cur = s->end = 0;
+}
+
+__bpf_kfunc_end_defs();

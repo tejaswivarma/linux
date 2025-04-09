@@ -254,7 +254,7 @@ static int eql_close(struct net_device *dev)
 	 *	at the data structure it scans every so often...
 	 */
 
-	del_timer_sync(&eql->timer);
+	timer_delete_sync(&eql->timer);
 
 	eql_kill_slave_queue(&eql->queue);
 
@@ -607,4 +607,5 @@ static void __exit eql_cleanup_module(void)
 
 module_init(eql_init_module);
 module_exit(eql_cleanup_module);
+MODULE_DESCRIPTION("Equalizer Load-balancer for serial network interfaces");
 MODULE_LICENSE("GPL");

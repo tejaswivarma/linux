@@ -47,8 +47,19 @@ static struct io_wq *io_init_wq_offload(struct io_ring_ctx *ctx,
 void __io_uring_free(struct task_struct *tsk)
 {
 	struct io_uring_task *tctx = tsk->io_uring;
+	struct io_tctx_node *node;
+	unsigned long index;
 
-	WARN_ON_ONCE(!xa_empty(&tctx->xa));
+	/*
+	 * Fault injection forcing allocation errors in the xa_store() path
+	 * can lead to xa_empty() returning false, even though no actual
+	 * node is stored in the xarray. Until that gets sorted out, attempt
+	 * an iteration here and warn if any entries are found.
+	 */
+	xa_for_each(&tctx->xa, index, node) {
+		WARN_ON_ONCE(1);
+		break;
+	}
 	WARN_ON_ONCE(tctx->io_wq);
 	WARN_ON_ONCE(tctx->cached_refs);
 
@@ -81,9 +92,10 @@ __cold int io_uring_alloc_task_context(struct task_struct *task,
 		return ret;
 	}
 
+	tctx->task = task;
 	xa_init(&tctx->xa);
 	init_waitqueue_head(&tctx->wait);
-	atomic_set(&tctx->in_idle, 0);
+	atomic_set(&tctx->in_cancel, 0);
 	atomic_set(&tctx->inflight_tracked, 0);
 	task->io_uring = tctx;
 	init_llist_head(&tctx->task_list);
@@ -91,31 +103,11 @@ __cold int io_uring_alloc_task_context(struct task_struct *task,
 	return 0;
 }
 
-static int io_register_submitter(struct io_ring_ctx *ctx)
-{
-	int ret = 0;
-
-	mutex_lock(&ctx->uring_lock);
-	if (!ctx->submitter_task)
-		ctx->submitter_task = get_task_struct(current);
-	else if (ctx->submitter_task != current)
-		ret = -EEXIST;
-	mutex_unlock(&ctx->uring_lock);
-
-	return ret;
-}
-
-int __io_uring_add_tctx_node(struct io_ring_ctx *ctx, bool submitter)
+int __io_uring_add_tctx_node(struct io_ring_ctx *ctx)
 {
 	struct io_uring_task *tctx = current->io_uring;
 	struct io_tctx_node *node;
 	int ret;
-
-	if ((ctx->flags & IORING_SETUP_SINGLE_ISSUER) && submitter) {
-		ret = io_register_submitter(ctx);
-		if (ret)
-			return ret;
-	}
 
 	if (unlikely(!tctx)) {
 		ret = io_uring_alloc_task_context(current, ctx);
@@ -150,8 +142,22 @@ int __io_uring_add_tctx_node(struct io_ring_ctx *ctx, bool submitter)
 		list_add(&node->ctx_node, &ctx->tctx_list);
 		mutex_unlock(&ctx->uring_lock);
 	}
-	if (submitter)
-		tctx->last = ctx;
+	return 0;
+}
+
+int __io_uring_add_tctx_node_from_submit(struct io_ring_ctx *ctx)
+{
+	int ret;
+
+	if (ctx->flags & IORING_SETUP_SINGLE_ISSUER
+	    && ctx->submitter_task != current)
+		return -EEXIST;
+
+	ret = __io_uring_add_tctx_node(ctx);
+	if (ret)
+		return ret;
+
+	current->io_uring->last = ctx;
 	return 0;
 }
 
@@ -214,29 +220,38 @@ void io_uring_unreg_ringfd(void)
 	}
 }
 
+int io_ring_add_registered_file(struct io_uring_task *tctx, struct file *file,
+				     int start, int end)
+{
+	int offset;
+	for (offset = start; offset < end; offset++) {
+		offset = array_index_nospec(offset, IO_RINGFD_REG_MAX);
+		if (tctx->registered_rings[offset])
+			continue;
+
+		tctx->registered_rings[offset] = file;
+		return offset;
+	}
+	return -EBUSY;
+}
+
 static int io_ring_add_registered_fd(struct io_uring_task *tctx, int fd,
 				     int start, int end)
 {
 	struct file *file;
 	int offset;
 
-	for (offset = start; offset < end; offset++) {
-		offset = array_index_nospec(offset, IO_RINGFD_REG_MAX);
-		if (tctx->registered_rings[offset])
-			continue;
-
-		file = fget(fd);
-		if (!file) {
-			return -EBADF;
-		} else if (!io_is_uring_fops(file)) {
-			fput(file);
-			return -EOPNOTSUPP;
-		}
-		tctx->registered_rings[offset] = file;
-		return offset;
+	file = fget(fd);
+	if (!file) {
+		return -EBADF;
+	} else if (!io_is_uring_fops(file)) {
+		fput(file);
+		return -EOPNOTSUPP;
 	}
-
-	return -EBUSY;
+	offset = io_ring_add_registered_file(tctx, file, start, end);
+	if (offset < 0)
+		fput(file);
+	return offset;
 }
 
 /*
@@ -259,7 +274,7 @@ int io_ringfd_register(struct io_ring_ctx *ctx, void __user *__arg,
 		return -EINVAL;
 
 	mutex_unlock(&ctx->uring_lock);
-	ret = __io_uring_add_tctx_node(ctx, false);
+	ret = __io_uring_add_tctx_node(ctx);
 	mutex_lock(&ctx->uring_lock);
 	if (ret)
 		return ret;

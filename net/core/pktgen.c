@@ -69,7 +69,7 @@
  *
  * By design there should only be *one* "controlling" process. In practice
  * multiple write accesses gives unpredictable result. Understood by "write"
- * to /proc gives result code thats should be read be the "writer".
+ * to /proc gives result code that should be read be the "writer".
  * For practical use this should be no problem.
  *
  * Note when adding devices to a specific CPU there good idea to also assign
@@ -158,9 +158,7 @@
 #include <net/udp.h>
 #include <net/ip6_checksum.h>
 #include <net/addrconf.h>
-#ifdef CONFIG_XFRM
 #include <net/xfrm.h>
-#endif
 #include <net/netns/generic.h>
 #include <asm/byteorder.h>
 #include <linux/rcupdate.h>
@@ -200,6 +198,7 @@
 	pf(VID_RND)		/* Random VLAN ID */			\
 	pf(SVID_RND)		/* Random SVLAN ID */			\
 	pf(NODE)		/* Node memory alloc*/			\
+	pf(SHARED)		/* Shared SKB */			\
 
 #define pf(flag)		flag##_SHIFT,
 enum pkt_flags {
@@ -516,21 +515,23 @@ static ssize_t pgctrl_write(struct file *file, const char __user *buf,
 			    size_t count, loff_t *ppos)
 {
 	char data[128];
+	size_t max;
 	struct pktgen_net *pn = net_generic(current->nsproxy->net_ns, pg_net_id);
 
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
-	if (count == 0)
+	if (count < 1)
 		return -EINVAL;
 
-	if (count > sizeof(data))
-		count = sizeof(data);
-
-	if (copy_from_user(data, buf, count))
+	max = min(count, sizeof(data) - 1);
+	if (copy_from_user(data, buf, max))
 		return -EFAULT;
 
-	data[count - 1] = 0;	/* Strip trailing '\n' and terminate string */
+	if (data[max - 1] == '\n')
+		data[max - 1] = 0; /* strip trailing '\n', terminate string */
+	else
+		data[max] = 0; /* terminate string */
 
 	if (!strcmp(data, "stop"))
 		pktgen_stop_all_threads(pn);
@@ -669,19 +670,19 @@ static int pktgen_if_show(struct seq_file *seq, void *v)
 	seq_puts(seq, "     Flags: ");
 
 	for (i = 0; i < NR_PKT_FLAGS; i++) {
-		if (i == F_FLOW_SEQ)
+		if (i == FLOW_SEQ_SHIFT)
 			if (!pkt_dev->cflows)
 				continue;
 
-		if (pkt_dev->flags & (1 << i))
+		if (pkt_dev->flags & (1 << i)) {
 			seq_printf(seq, "%s  ", pkt_flag_names[i]);
-		else if (i == F_FLOW_SEQ)
-			seq_puts(seq, "FLOW_RND  ");
-
 #ifdef CONFIG_XFRM
-		if (i == F_IPSEC && pkt_dev->spi)
-			seq_printf(seq, "spi:%u", pkt_dev->spi);
+			if (i == IPSEC_SHIFT && pkt_dev->spi)
+				seq_printf(seq, "spi:%u  ", pkt_dev->spi);
 #endif
+		} else if (i == FLOW_SEQ_SHIFT) {
+			seq_puts(seq, "FLOW_RND  ");
+		}
 	}
 
 	seq_puts(seq, "\n");
@@ -743,31 +744,32 @@ static int pktgen_if_show(struct seq_file *seq, void *v)
 }
 
 
-static int hex32_arg(const char __user *user_buffer, unsigned long maxlen,
-		     __u32 *num)
+static ssize_t hex32_arg(const char __user *user_buffer, size_t maxlen,
+			 __u32 *num)
 {
-	int i = 0;
+	size_t i = 0;
+
 	*num = 0;
 
 	for (; i < maxlen; i++) {
 		int value;
 		char c;
-		*num <<= 4;
 		if (get_user(c, &user_buffer[i]))
 			return -EFAULT;
 		value = hex_to_bin(c);
-		if (value >= 0)
+		if (value >= 0) {
+			*num <<= 4;
 			*num |= value;
-		else
+		} else {
 			break;
+		}
 	}
 	return i;
 }
 
-static int count_trail_chars(const char __user * user_buffer,
-			     unsigned int maxlen)
+static ssize_t count_trail_chars(const char __user *user_buffer, size_t maxlen)
 {
-	int i;
+	size_t i;
 
 	for (i = 0; i < maxlen; i++) {
 		char c;
@@ -789,10 +791,10 @@ done:
 	return i;
 }
 
-static long num_arg(const char __user *user_buffer, unsigned long maxlen,
-				unsigned long *num)
+static ssize_t num_arg(const char __user *user_buffer, size_t maxlen,
+		       unsigned long *num)
 {
-	int i;
+	size_t i;
 	*num = 0;
 
 	for (i = 0; i < maxlen; i++) {
@@ -808,9 +810,9 @@ static long num_arg(const char __user *user_buffer, unsigned long maxlen,
 	return i;
 }
 
-static int strn_len(const char __user * user_buffer, unsigned int maxlen)
+static ssize_t strn_len(const char __user *user_buffer, size_t maxlen)
 {
-	int i;
+	size_t i;
 
 	for (i = 0; i < maxlen; i++) {
 		char c;
@@ -822,6 +824,7 @@ static int strn_len(const char __user * user_buffer, unsigned int maxlen)
 		case '\r':
 		case '\t':
 		case ' ':
+		case '=':
 			goto done_str;
 		default:
 			break;
@@ -837,11 +840,11 @@ done_str:
  * "size1,weight_1 size2,weight_2 ... size_n,weight_n" for example.
  */
 static ssize_t get_imix_entries(const char __user *buffer,
+				size_t maxlen,
 				struct pktgen_dev *pkt_dev)
 {
-	const int max_digits = 10;
-	int i = 0;
-	long len;
+	size_t i = 0, max;
+	ssize_t len;
 	char c;
 
 	pkt_dev->n_imix_entries = 0;
@@ -850,21 +853,33 @@ static ssize_t get_imix_entries(const char __user *buffer,
 		unsigned long weight;
 		unsigned long size;
 
-		len = num_arg(&buffer[i], max_digits, &size);
+		if (pkt_dev->n_imix_entries >= MAX_IMIX_ENTRIES)
+			return -E2BIG;
+
+		if (i >= maxlen)
+			return -EINVAL;
+
+		max = min(10, maxlen - i);
+		len = num_arg(&buffer[i], max, &size);
 		if (len < 0)
 			return len;
 		i += len;
+		if (i >= maxlen)
+			return -EINVAL;
 		if (get_user(c, &buffer[i]))
 			return -EFAULT;
 		/* Check for comma between size_i and weight_i */
 		if (c != ',')
 			return -EINVAL;
 		i++;
+		if (i >= maxlen)
+			return -EINVAL;
 
 		if (size < 14 + 20 + 8)
 			size = 14 + 20 + 8;
 
-		len = num_arg(&buffer[i], max_digits, &weight);
+		max = min(10, maxlen - i);
+		len = num_arg(&buffer[i], max, &weight);
 		if (len < 0)
 			return len;
 		if (weight <= 0)
@@ -874,42 +889,55 @@ static ssize_t get_imix_entries(const char __user *buffer,
 		pkt_dev->imix_entries[pkt_dev->n_imix_entries].weight = weight;
 
 		i += len;
-		if (get_user(c, &buffer[i]))
-			return -EFAULT;
-
-		i++;
 		pkt_dev->n_imix_entries++;
 
-		if (pkt_dev->n_imix_entries > MAX_IMIX_ENTRIES)
-			return -E2BIG;
+		if (i >= maxlen)
+			break;
+		if (get_user(c, &buffer[i]))
+			return -EFAULT;
+		i++;
 	} while (c == ' ');
 
 	return i;
 }
 
-static ssize_t get_labels(const char __user *buffer, struct pktgen_dev *pkt_dev)
+static ssize_t get_labels(const char __user *buffer,
+			  size_t maxlen, struct pktgen_dev *pkt_dev)
 {
 	unsigned int n = 0;
+	size_t i = 0, max;
+	ssize_t len;
 	char c;
-	ssize_t i = 0;
-	int len;
 
 	pkt_dev->nr_labels = 0;
 	do {
 		__u32 tmp;
-		len = hex32_arg(&buffer[i], 8, &tmp);
-		if (len <= 0)
+
+		if (n >= MAX_MPLS_LABELS)
+			return -E2BIG;
+
+		if (i >= maxlen)
+			return -EINVAL;
+
+		max = min(8, maxlen - i);
+		len = hex32_arg(&buffer[i], max, &tmp);
+		if (len < 0)
 			return len;
+
+		/* return empty list in case of invalid input or zero value */
+		if (len == 0 || tmp == 0)
+			return maxlen;
+
 		pkt_dev->labels[n] = htonl(tmp);
 		if (pkt_dev->labels[n] & MPLS_STACK_BOTTOM)
 			pkt_dev->flags |= F_MPLS_RND;
 		i += len;
+		n++;
+		if (i >= maxlen)
+			break;
 		if (get_user(c, &buffer[i]))
 			return -EFAULT;
 		i++;
-		n++;
-		if (n >= MAX_MPLS_LABELS)
-			return -E2BIG;
 	} while (c == ',');
 
 	pkt_dev->nr_labels = n;
@@ -951,11 +979,11 @@ static ssize_t pktgen_if_write(struct file *file,
 {
 	struct seq_file *seq = file->private_data;
 	struct pktgen_dev *pkt_dev = seq->private;
-	int i, max, len;
+	size_t i, max;
+	ssize_t len;
 	char name[16], valstr[32];
 	unsigned long value = 0;
 	char *pg_result = NULL;
-	int tmp = 0;
 	char buf[128];
 
 	pg_result = &(pkt_dev->result[0]);
@@ -966,16 +994,16 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	max = count;
-	tmp = count_trail_chars(user_buffer, max);
-	if (tmp < 0) {
+	len = count_trail_chars(user_buffer, max);
+	if (len < 0) {
 		pr_warn("illegal format\n");
-		return tmp;
+		return len;
 	}
-	i = tmp;
+	i = len;
 
 	/* Read variable name */
-
-	len = strn_len(&user_buffer[i], sizeof(name) - 1);
+	max = min(sizeof(name) - 1, count - i);
+	len = strn_len(&user_buffer[i], max);
 	if (len < 0)
 		return len;
 
@@ -1003,11 +1031,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "min_pkt_size")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value < 14 + 20 + 8)
 			value = 14 + 20 + 8;
 		if (value != pkt_dev->min_pkt_size) {
@@ -1020,11 +1048,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "max_pkt_size")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value < 14 + 20 + 8)
 			value = 14 + 20 + 8;
 		if (value != pkt_dev->max_pkt_size) {
@@ -1039,11 +1067,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	/* Shortcut for min = max */
 
 	if (!strcmp(name, "pkt_size")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value < 14 + 20 + 8)
 			value = 14 + 20 + 8;
 		if (value != pkt_dev->min_pkt_size) {
@@ -1059,43 +1087,43 @@ static ssize_t pktgen_if_write(struct file *file,
 		if (pkt_dev->clone_skb > 0)
 			return -EINVAL;
 
-		len = get_imix_entries(&user_buffer[i], pkt_dev);
+		max = count - i;
+		len = get_imix_entries(&user_buffer[i], max, pkt_dev);
 		if (len < 0)
 			return len;
 
 		fill_imix_distribution(pkt_dev);
 
-		i += len;
 		return count;
 	}
 
 	if (!strcmp(name, "debug")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		debug = value;
 		sprintf(pg_result, "OK: debug=%u", debug);
 		return count;
 	}
 
 	if (!strcmp(name, "frags")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		pkt_dev->nfrags = value;
 		sprintf(pg_result, "OK: frags=%d", pkt_dev->nfrags);
 		return count;
 	}
 	if (!strcmp(name, "delay")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value == 0x7FFFFFFF)
 			pkt_dev->delay = ULLONG_MAX;
 		else
@@ -1106,13 +1134,13 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "rate")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (!value)
-			return len;
+			return -EINVAL;
 		pkt_dev->delay = pkt_dev->min_pkt_size*8*NSEC_PER_USEC/value;
 		if (debug)
 			pr_info("Delay set at: %llu ns\n", pkt_dev->delay);
@@ -1121,13 +1149,13 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "ratep")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (!value)
-			return len;
+			return -EINVAL;
 		pkt_dev->delay = NSEC_PER_SEC/value;
 		if (debug)
 			pr_info("Delay set at: %llu ns\n", pkt_dev->delay);
@@ -1136,11 +1164,11 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "udp_src_min")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value != pkt_dev->udp_src_min) {
 			pkt_dev->udp_src_min = value;
 			pkt_dev->cur_udp_src = value;
@@ -1149,11 +1177,11 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "udp_dst_min")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value != pkt_dev->udp_dst_min) {
 			pkt_dev->udp_dst_min = value;
 			pkt_dev->cur_udp_dst = value;
@@ -1162,11 +1190,11 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "udp_src_max")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value != pkt_dev->udp_src_max) {
 			pkt_dev->udp_src_max = value;
 			pkt_dev->cur_udp_src = value;
@@ -1175,11 +1203,11 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "udp_dst_max")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value != pkt_dev->udp_dst_max) {
 			pkt_dev->udp_dst_max = value;
 			pkt_dev->cur_udp_dst = value;
@@ -1188,7 +1216,8 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "clone_skb")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 		/* clone_skb is not supported for netif_receive xmit_mode and
@@ -1197,33 +1226,33 @@ static ssize_t pktgen_if_write(struct file *file,
 		if ((value > 0) &&
 		    ((pkt_dev->xmit_mode == M_NETIF_RECEIVE) ||
 		     !(pkt_dev->odev->priv_flags & IFF_TX_SKB_SHARING)))
-			return -ENOTSUPP;
-		if (value > 0 && pkt_dev->n_imix_entries > 0)
+			return -EOPNOTSUPP;
+		if (value > 0 && (pkt_dev->n_imix_entries > 0 ||
+				  !(pkt_dev->flags & F_SHARED)))
 			return -EINVAL;
 
-		i += len;
 		pkt_dev->clone_skb = value;
 
 		sprintf(pg_result, "OK: clone_skb=%d", pkt_dev->clone_skb);
 		return count;
 	}
 	if (!strcmp(name, "count")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		pkt_dev->count = value;
 		sprintf(pg_result, "OK: count=%llu",
 			(unsigned long long)pkt_dev->count);
 		return count;
 	}
 	if (!strcmp(name, "src_mac_count")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (pkt_dev->src_mac_count != value) {
 			pkt_dev->src_mac_count = value;
 			pkt_dev->cur_src_mac_offset = 0;
@@ -1233,11 +1262,11 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "dst_mac_count")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (pkt_dev->dst_mac_count != value) {
 			pkt_dev->dst_mac_count = value;
 			pkt_dev->cur_dst_mac_offset = 0;
@@ -1247,26 +1276,29 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "burst")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if ((value > 1) &&
 		    ((pkt_dev->xmit_mode == M_QUEUE_XMIT) ||
 		     ((pkt_dev->xmit_mode == M_START_XMIT) &&
 		     (!(pkt_dev->odev->priv_flags & IFF_TX_SKB_SHARING)))))
-			return -ENOTSUPP;
+			return -EOPNOTSUPP;
+
+		if (value > 1 && !(pkt_dev->flags & F_SHARED))
+			return -EINVAL;
+
 		pkt_dev->burst = value < 1 ? 1 : value;
 		sprintf(pg_result, "OK: burst=%u", pkt_dev->burst);
 		return count;
 	}
 	if (!strcmp(name, "node")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
-
-		i += len;
 
 		if (node_possible(value)) {
 			pkt_dev->node = value;
@@ -1283,21 +1315,21 @@ static ssize_t pktgen_if_write(struct file *file,
 	if (!strcmp(name, "xmit_mode")) {
 		char f[32];
 
-		memset(f, 0, 32);
-		len = strn_len(&user_buffer[i], sizeof(f) - 1);
+		max = min(sizeof(f) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
+		memset(f, 0, sizeof(f));
 		if (copy_from_user(f, &user_buffer[i], len))
 			return -EFAULT;
-		i += len;
 
 		if (strcmp(f, "start_xmit") == 0) {
 			pkt_dev->xmit_mode = M_START_XMIT;
 		} else if (strcmp(f, "netif_receive") == 0) {
 			/* clone_skb set earlier, not supported in this mode */
 			if (pkt_dev->clone_skb > 0)
-				return -ENOTSUPP;
+				return -EOPNOTSUPP;
 
 			pkt_dev->xmit_mode = M_NETIF_RECEIVE;
 
@@ -1318,46 +1350,62 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "flag")) {
+		bool disable = false;
 		__u32 flag;
 		char f[32];
-		bool disable = false;
+		char *end;
 
-		memset(f, 0, 32);
-		len = strn_len(&user_buffer[i], sizeof(f) - 1);
+		max = min(sizeof(f) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
+		memset(f, 0, 32);
 		if (copy_from_user(f, &user_buffer[i], len))
 			return -EFAULT;
-		i += len;
 
 		flag = pktgen_read_flag(f, &disable);
-
 		if (flag) {
-			if (disable)
+			if (disable) {
+				/* If "clone_skb", or "burst" parameters are
+				 * configured, it means that the skb still
+				 * needs to be referenced by the pktgen, so
+				 * the skb must be shared.
+				 */
+				if (flag == F_SHARED && (pkt_dev->clone_skb ||
+							 pkt_dev->burst > 1))
+					return -EINVAL;
 				pkt_dev->flags &= ~flag;
-			else
+			} else {
 				pkt_dev->flags |= flag;
-		} else {
-			sprintf(pg_result,
-				"Flag -:%s:- unknown\nAvailable flags, (prepend ! to un-set flag):\n%s",
-				f,
-				"IPSRC_RND, IPDST_RND, UDPSRC_RND, UDPDST_RND, "
-				"MACSRC_RND, MACDST_RND, TXSIZE_RND, IPV6, "
-				"MPLS_RND, VID_RND, SVID_RND, FLOW_SEQ, "
-				"QUEUE_MAP_RND, QUEUE_MAP_CPU, UDPCSUM, "
-				"NO_TIMESTAMP, "
-#ifdef CONFIG_XFRM
-				"IPSEC, "
-#endif
-				"NODE_ALLOC\n");
+			}
+
+			sprintf(pg_result, "OK: flags=0x%x", pkt_dev->flags);
 			return count;
 		}
-		sprintf(pg_result, "OK: flags=0x%x", pkt_dev->flags);
+
+		/* Unknown flag */
+		end = pkt_dev->result + sizeof(pkt_dev->result);
+		pg_result += sprintf(pg_result,
+			"Flag -:%s:- unknown\n"
+			"Available flags, (prepend ! to un-set flag):\n", f);
+
+		for (int n = 0; n < NR_PKT_FLAGS && pg_result < end; n++) {
+			if (!IS_ENABLED(CONFIG_XFRM) && n == IPSEC_SHIFT)
+				continue;
+			pg_result += snprintf(pg_result, end - pg_result,
+					      "%s, ", pkt_flag_names[n]);
+		}
+		if (!WARN_ON_ONCE(pg_result >= end)) {
+			/* Remove the comma and whitespace at the end */
+			*(pg_result - 2) = '\0';
+		}
+
 		return count;
 	}
 	if (!strcmp(name, "dst_min") || !strcmp(name, "dst")) {
-		len = strn_len(&user_buffer[i], sizeof(pkt_dev->dst_min) - 1);
+		max = min(sizeof(pkt_dev->dst_min) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1372,12 +1420,13 @@ static ssize_t pktgen_if_write(struct file *file,
 		}
 		if (debug)
 			pr_debug("dst_min set to: %s\n", pkt_dev->dst_min);
-		i += len;
+
 		sprintf(pg_result, "OK: dst_min=%s", pkt_dev->dst_min);
 		return count;
 	}
 	if (!strcmp(name, "dst_max")) {
-		len = strn_len(&user_buffer[i], sizeof(pkt_dev->dst_max) - 1);
+		max = min(sizeof(pkt_dev->dst_max) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1392,12 +1441,13 @@ static ssize_t pktgen_if_write(struct file *file,
 		}
 		if (debug)
 			pr_debug("dst_max set to: %s\n", pkt_dev->dst_max);
-		i += len;
+
 		sprintf(pg_result, "OK: dst_max=%s", pkt_dev->dst_max);
 		return count;
 	}
 	if (!strcmp(name, "dst6")) {
-		len = strn_len(&user_buffer[i], sizeof(buf) - 1);
+		max = min(sizeof(buf) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1415,12 +1465,12 @@ static ssize_t pktgen_if_write(struct file *file,
 		if (debug)
 			pr_debug("dst6 set to: %s\n", buf);
 
-		i += len;
 		sprintf(pg_result, "OK: dst6=%s", buf);
 		return count;
 	}
 	if (!strcmp(name, "dst6_min")) {
-		len = strn_len(&user_buffer[i], sizeof(buf) - 1);
+		max = min(sizeof(buf) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1437,12 +1487,12 @@ static ssize_t pktgen_if_write(struct file *file,
 		if (debug)
 			pr_debug("dst6_min set to: %s\n", buf);
 
-		i += len;
 		sprintf(pg_result, "OK: dst6_min=%s", buf);
 		return count;
 	}
 	if (!strcmp(name, "dst6_max")) {
-		len = strn_len(&user_buffer[i], sizeof(buf) - 1);
+		max = min(sizeof(buf) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1458,12 +1508,12 @@ static ssize_t pktgen_if_write(struct file *file,
 		if (debug)
 			pr_debug("dst6_max set to: %s\n", buf);
 
-		i += len;
 		sprintf(pg_result, "OK: dst6_max=%s", buf);
 		return count;
 	}
 	if (!strcmp(name, "src6")) {
-		len = strn_len(&user_buffer[i], sizeof(buf) - 1);
+		max = min(sizeof(buf) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1481,12 +1531,12 @@ static ssize_t pktgen_if_write(struct file *file,
 		if (debug)
 			pr_debug("src6 set to: %s\n", buf);
 
-		i += len;
 		sprintf(pg_result, "OK: src6=%s", buf);
 		return count;
 	}
 	if (!strcmp(name, "src_min")) {
-		len = strn_len(&user_buffer[i], sizeof(pkt_dev->src_min) - 1);
+		max = min(sizeof(pkt_dev->src_min) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1501,12 +1551,13 @@ static ssize_t pktgen_if_write(struct file *file,
 		}
 		if (debug)
 			pr_debug("src_min set to: %s\n", pkt_dev->src_min);
-		i += len;
+
 		sprintf(pg_result, "OK: src_min=%s", pkt_dev->src_min);
 		return count;
 	}
 	if (!strcmp(name, "src_max")) {
-		len = strn_len(&user_buffer[i], sizeof(pkt_dev->src_max) - 1);
+		max = min(sizeof(pkt_dev->src_max) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1521,12 +1572,13 @@ static ssize_t pktgen_if_write(struct file *file,
 		}
 		if (debug)
 			pr_debug("src_max set to: %s\n", pkt_dev->src_max);
-		i += len;
+
 		sprintf(pg_result, "OK: src_max=%s", pkt_dev->src_max);
 		return count;
 	}
 	if (!strcmp(name, "dst_mac")) {
-		len = strn_len(&user_buffer[i], sizeof(valstr) - 1);
+		max = min(sizeof(valstr) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1543,7 +1595,8 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "src_mac")) {
-		len = strn_len(&user_buffer[i], sizeof(valstr) - 1);
+		max = min(sizeof(valstr) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0)
 			return len;
 
@@ -1567,11 +1620,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "flows")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value > MAX_CFLOWS)
 			value = MAX_CFLOWS;
 
@@ -1581,44 +1634,44 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 #ifdef CONFIG_XFRM
 	if (!strcmp(name, "spi")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		pkt_dev->spi = value;
 		sprintf(pg_result, "OK: spi=%u", pkt_dev->spi);
 		return count;
 	}
 #endif
 	if (!strcmp(name, "flowlen")) {
-		len = num_arg(&user_buffer[i], 10, &value);
+		max = min(10, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		pkt_dev->lflow = value;
 		sprintf(pg_result, "OK: flowlen=%u", pkt_dev->lflow);
 		return count;
 	}
 
 	if (!strcmp(name, "queue_map_min")) {
-		len = num_arg(&user_buffer[i], 5, &value);
+		max = min(5, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		pkt_dev->queue_map_min = value;
 		sprintf(pg_result, "OK: queue_map_min=%u", pkt_dev->queue_map_min);
 		return count;
 	}
 
 	if (!strcmp(name, "queue_map_max")) {
-		len = num_arg(&user_buffer[i], 5, &value);
+		max = min(5, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		pkt_dev->queue_map_max = value;
 		sprintf(pg_result, "OK: queue_map_max=%u", pkt_dev->queue_map_max);
 		return count;
@@ -1627,10 +1680,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	if (!strcmp(name, "mpls")) {
 		unsigned int n, cnt;
 
-		len = get_labels(&user_buffer[i], pkt_dev);
+		max = count - i;
+		len = get_labels(&user_buffer[i], max, pkt_dev);
 		if (len < 0)
 			return len;
-		i += len;
+
 		cnt = sprintf(pg_result, "OK: mpls=");
 		for (n = 0; n < pkt_dev->nr_labels; n++)
 			cnt += sprintf(pg_result + cnt,
@@ -1648,11 +1702,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "vlan_id")) {
-		len = num_arg(&user_buffer[i], 4, &value);
+		max = min(4, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (value <= 4095) {
 			pkt_dev->vlan_id = value;  /* turn on VLAN */
 
@@ -1675,11 +1729,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "vlan_p")) {
-		len = num_arg(&user_buffer[i], 1, &value);
+		max = min(1, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if ((value <= 7) && (pkt_dev->vlan_id != 0xffff)) {
 			pkt_dev->vlan_p = value;
 			sprintf(pg_result, "OK: vlan_p=%u", pkt_dev->vlan_p);
@@ -1690,11 +1744,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "vlan_cfi")) {
-		len = num_arg(&user_buffer[i], 1, &value);
+		max = min(1, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if ((value <= 1) && (pkt_dev->vlan_id != 0xffff)) {
 			pkt_dev->vlan_cfi = value;
 			sprintf(pg_result, "OK: vlan_cfi=%u", pkt_dev->vlan_cfi);
@@ -1705,11 +1759,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "svlan_id")) {
-		len = num_arg(&user_buffer[i], 4, &value);
+		max = min(4, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if ((value <= 4095) && ((pkt_dev->vlan_id != 0xffff))) {
 			pkt_dev->svlan_id = value;  /* turn on SVLAN */
 
@@ -1732,11 +1786,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "svlan_p")) {
-		len = num_arg(&user_buffer[i], 1, &value);
+		max = min(1, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if ((value <= 7) && (pkt_dev->svlan_id != 0xffff)) {
 			pkt_dev->svlan_p = value;
 			sprintf(pg_result, "OK: svlan_p=%u", pkt_dev->svlan_p);
@@ -1747,11 +1801,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "svlan_cfi")) {
-		len = num_arg(&user_buffer[i], 1, &value);
+		max = min(1, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if ((value <= 1) && (pkt_dev->svlan_id != 0xffff)) {
 			pkt_dev->svlan_cfi = value;
 			sprintf(pg_result, "OK: svlan_cfi=%u", pkt_dev->svlan_cfi);
@@ -1762,12 +1816,13 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "tos")) {
-		__u32 tmp_value = 0;
-		len = hex32_arg(&user_buffer[i], 2, &tmp_value);
+		__u32 tmp_value;
+
+		max = min(2, count - i);
+		len = hex32_arg(&user_buffer[i], max, &tmp_value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (len == 2) {
 			pkt_dev->tos = tmp_value;
 			sprintf(pg_result, "OK: tos=0x%02x", pkt_dev->tos);
@@ -1778,12 +1833,13 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "traffic_class")) {
-		__u32 tmp_value = 0;
-		len = hex32_arg(&user_buffer[i], 2, &tmp_value);
+		__u32 tmp_value;
+
+		max = min(2, count - i);
+		len = hex32_arg(&user_buffer[i], max, &tmp_value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		if (len == 2) {
 			pkt_dev->traffic_class = tmp_value;
 			sprintf(pg_result, "OK: traffic_class=0x%02x", pkt_dev->traffic_class);
@@ -1794,11 +1850,11 @@ static ssize_t pktgen_if_write(struct file *file,
 	}
 
 	if (!strcmp(name, "skb_priority")) {
-		len = num_arg(&user_buffer[i], 9, &value);
+		max = min(9, count - i);
+		len = num_arg(&user_buffer[i], max, &value);
 		if (len < 0)
 			return len;
 
-		i += len;
 		pkt_dev->skb_priority = value;
 		sprintf(pg_result, "OK: skb_priority=%i",
 			pkt_dev->skb_priority);
@@ -1858,7 +1914,8 @@ static ssize_t pktgen_thread_write(struct file *file,
 {
 	struct seq_file *seq = file->private_data;
 	struct pktgen_thread *t = seq->private;
-	int i, max, len, ret;
+	size_t i, max;
+	ssize_t len, ret;
 	char name[40];
 	char *pg_result;
 
@@ -1875,8 +1932,8 @@ static ssize_t pktgen_thread_write(struct file *file,
 	i = len;
 
 	/* Read variable name */
-
-	len = strn_len(&user_buffer[i], sizeof(name) - 1);
+	max = min(sizeof(name) - 1, count - i);
+	len = strn_len(&user_buffer[i], max);
 	if (len < 0)
 		return len;
 
@@ -1906,14 +1963,15 @@ static ssize_t pktgen_thread_write(struct file *file,
 	if (!strcmp(name, "add_device")) {
 		char f[32];
 		memset(f, 0, 32);
-		len = strn_len(&user_buffer[i], sizeof(f) - 1);
+		max = min(sizeof(f) - 1, count - i);
+		len = strn_len(&user_buffer[i], max);
 		if (len < 0) {
 			ret = len;
 			goto out;
 		}
 		if (copy_from_user(f, &user_buffer[i], len))
 			return -EFAULT;
-		i += len;
+
 		mutex_lock(&pktgen_thread_lock);
 		ret = pktgen_add_device(t, f);
 		mutex_unlock(&pktgen_thread_lock);
@@ -2264,7 +2322,7 @@ static void spin(struct pktgen_dev *pkt_dev, ktime_t spin_until)
 	s64 remaining;
 	struct hrtimer_sleeper t;
 
-	hrtimer_init_sleeper_on_stack(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+	hrtimer_setup_sleeper_on_stack(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
 	hrtimer_set_expires(&t.timer, spin_until);
 
 	remaining = ktime_to_ns(hrtimer_expires_remaining(&t.timer));
@@ -2324,7 +2382,7 @@ static inline int f_pick(struct pktgen_dev *pkt_dev)
 				pkt_dev->curfl = 0; /*reset */
 		}
 	} else {
-		flow = prandom_u32() % pkt_dev->cflows;
+		flow = get_random_u32_below(pkt_dev->cflows);
 		pkt_dev->curfl = flow;
 
 		if (pkt_dev->flows[flow].count > pkt_dev->lflow) {
@@ -2337,24 +2395,24 @@ static inline int f_pick(struct pktgen_dev *pkt_dev)
 }
 
 
-#ifdef CONFIG_XFRM
 /* If there was already an IPSEC SA, we keep it as is, else
  * we go look for it ...
 */
 #define DUMMY_MARK 0
 static void get_ipsec_sa(struct pktgen_dev *pkt_dev, int flow)
 {
+#ifdef CONFIG_XFRM
 	struct xfrm_state *x = pkt_dev->flows[flow].x;
 	struct pktgen_net *pn = net_generic(dev_net(pkt_dev->odev), pg_net_id);
 	if (!x) {
 
 		if (pkt_dev->spi) {
 			/* We need as quick as possible to find the right SA
-			 * Searching with minimum criteria to archieve this.
+			 * Searching with minimum criteria to achieve, this.
 			 */
 			x = xfrm_state_lookup_byspi(pn->net, htonl(pkt_dev->spi), AF_INET);
 		} else {
-			/* slow path: we dont already have xfrm_state */
+			/* slow path: we don't already have xfrm_state */
 			x = xfrm_stateonly_find(pn->net, DUMMY_MARK, 0,
 						(xfrm_address_t *)&pkt_dev->cur_daddr,
 						(xfrm_address_t *)&pkt_dev->cur_saddr,
@@ -2369,21 +2427,18 @@ static void get_ipsec_sa(struct pktgen_dev *pkt_dev, int flow)
 		}
 
 	}
-}
 #endif
+}
 static void set_cur_queue_map(struct pktgen_dev *pkt_dev)
 {
-
 	if (pkt_dev->flags & F_QUEUE_MAP_CPU)
 		pkt_dev->cur_queue_map = smp_processor_id();
 
 	else if (pkt_dev->queue_map_min <= pkt_dev->queue_map_max) {
 		__u16 t;
 		if (pkt_dev->flags & F_QUEUE_MAP_RND) {
-			t = prandom_u32() %
-				(pkt_dev->queue_map_max -
-				 pkt_dev->queue_map_min + 1)
-				+ pkt_dev->queue_map_min;
+			t = get_random_u32_inclusive(pkt_dev->queue_map_min,
+						     pkt_dev->queue_map_max);
 		} else {
 			t = pkt_dev->cur_queue_map + 1;
 			if (t > pkt_dev->queue_map_max)
@@ -2412,7 +2467,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 		__u32 tmp;
 
 		if (pkt_dev->flags & F_MACSRC_RND)
-			mc = prandom_u32() % pkt_dev->src_mac_count;
+			mc = get_random_u32_below(pkt_dev->src_mac_count);
 		else {
 			mc = pkt_dev->cur_src_mac_offset++;
 			if (pkt_dev->cur_src_mac_offset >=
@@ -2438,7 +2493,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 		__u32 tmp;
 
 		if (pkt_dev->flags & F_MACDST_RND)
-			mc = prandom_u32() % pkt_dev->dst_mac_count;
+			mc = get_random_u32_below(pkt_dev->dst_mac_count);
 
 		else {
 			mc = pkt_dev->cur_dst_mac_offset++;
@@ -2465,23 +2520,22 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 		for (i = 0; i < pkt_dev->nr_labels; i++)
 			if (pkt_dev->labels[i] & MPLS_STACK_BOTTOM)
 				pkt_dev->labels[i] = MPLS_STACK_BOTTOM |
-					     ((__force __be32)prandom_u32() &
+					     ((__force __be32)get_random_u32() &
 						      htonl(0x000fffff));
 	}
 
 	if ((pkt_dev->flags & F_VID_RND) && (pkt_dev->vlan_id != 0xffff)) {
-		pkt_dev->vlan_id = prandom_u32() & (4096 - 1);
+		pkt_dev->vlan_id = get_random_u32_below(4096);
 	}
 
 	if ((pkt_dev->flags & F_SVID_RND) && (pkt_dev->svlan_id != 0xffff)) {
-		pkt_dev->svlan_id = prandom_u32() & (4096 - 1);
+		pkt_dev->svlan_id = get_random_u32_below(4096);
 	}
 
 	if (pkt_dev->udp_src_min < pkt_dev->udp_src_max) {
 		if (pkt_dev->flags & F_UDPSRC_RND)
-			pkt_dev->cur_udp_src = prandom_u32() %
-				(pkt_dev->udp_src_max - pkt_dev->udp_src_min)
-				+ pkt_dev->udp_src_min;
+			pkt_dev->cur_udp_src = get_random_u32_inclusive(pkt_dev->udp_src_min,
+									pkt_dev->udp_src_max - 1);
 
 		else {
 			pkt_dev->cur_udp_src++;
@@ -2492,9 +2546,8 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 
 	if (pkt_dev->udp_dst_min < pkt_dev->udp_dst_max) {
 		if (pkt_dev->flags & F_UDPDST_RND) {
-			pkt_dev->cur_udp_dst = prandom_u32() %
-				(pkt_dev->udp_dst_max - pkt_dev->udp_dst_min)
-				+ pkt_dev->udp_dst_min;
+			pkt_dev->cur_udp_dst = get_random_u32_inclusive(pkt_dev->udp_dst_min,
+									pkt_dev->udp_dst_max - 1);
 		} else {
 			pkt_dev->cur_udp_dst++;
 			if (pkt_dev->cur_udp_dst >= pkt_dev->udp_dst_max)
@@ -2509,7 +2562,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 		if (imn < imx) {
 			__u32 t;
 			if (pkt_dev->flags & F_IPSRC_RND)
-				t = prandom_u32() % (imx - imn) + imn;
+				t = get_random_u32_inclusive(imn, imx - 1);
 			else {
 				t = ntohl(pkt_dev->cur_saddr);
 				t++;
@@ -2531,8 +2584,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 				if (pkt_dev->flags & F_IPDST_RND) {
 
 					do {
-						t = prandom_u32() %
-							(imx - imn) + imn;
+						t = get_random_u32_inclusive(imn, imx - 1);
 						s = htonl(t);
 					} while (ipv4_is_loopback(s) ||
 						ipv4_is_multicast(s) ||
@@ -2553,10 +2605,8 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 				pkt_dev->flows[flow].flags |= F_INIT;
 				pkt_dev->flows[flow].cur_daddr =
 				    pkt_dev->cur_daddr;
-#ifdef CONFIG_XFRM
 				if (pkt_dev->flags & F_IPSEC)
 					get_ipsec_sa(pkt_dev, flow);
-#endif
 				pkt_dev->nflows++;
 			}
 		}
@@ -2569,7 +2619,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 
 			for (i = 0; i < 4; i++) {
 				pkt_dev->cur_in6_daddr.s6_addr32[i] =
-				    (((__force __be32)prandom_u32() |
+				    (((__force __be32)get_random_u32() |
 				      pkt_dev->min_in6_daddr.s6_addr32[i]) &
 				     pkt_dev->max_in6_daddr.s6_addr32[i]);
 			}
@@ -2579,9 +2629,8 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 	if (pkt_dev->min_pkt_size < pkt_dev->max_pkt_size) {
 		__u32 t;
 		if (pkt_dev->flags & F_TXSIZE_RND) {
-			t = prandom_u32() %
-				(pkt_dev->max_pkt_size - pkt_dev->min_pkt_size)
-				+ pkt_dev->min_pkt_size;
+			t = get_random_u32_inclusive(pkt_dev->min_pkt_size,
+						     pkt_dev->max_pkt_size - 1);
 		} else {
 			t = pkt_dev->cur_pkt_size + 1;
 			if (t > pkt_dev->max_pkt_size)
@@ -2590,7 +2639,7 @@ static void mod_cur_headers(struct pktgen_dev *pkt_dev)
 		pkt_dev->cur_pkt_size = t;
 	} else if (pkt_dev->n_imix_entries > 0) {
 		struct imix_pkt *entry;
-		__u32 t = prandom_u32() % IMIX_PRECISION;
+		__u32 t = get_random_u32_below(IMIX_PRECISION);
 		__u8 entry_index = pkt_dev->imix_distribution[t];
 
 		entry = &pkt_dev->imix_entries[entry_index];
@@ -2791,14 +2840,17 @@ static void pktgen_finalize_skb(struct pktgen_dev *pkt_dev, struct sk_buff *skb,
 					break;
 			}
 			get_page(pkt_dev->page);
-			skb_frag_set_page(skb, i, pkt_dev->page);
-			skb_frag_off_set(&skb_shinfo(skb)->frags[i], 0);
+
 			/*last fragment, fill rest of data*/
 			if (i == (frags - 1))
-				skb_frag_size_set(&skb_shinfo(skb)->frags[i],
-				    (datalen < PAGE_SIZE ? datalen : PAGE_SIZE));
+				skb_frag_fill_page_desc(&skb_shinfo(skb)->frags[i],
+							pkt_dev->page, 0,
+							(datalen < PAGE_SIZE ?
+							 datalen : PAGE_SIZE));
 			else
-				skb_frag_size_set(&skb_shinfo(skb)->frags[i], frag_len);
+				skb_frag_fill_page_desc(&skb_shinfo(skb)->frags[i],
+							pkt_dev->page, 0, frag_len);
+
 			datalen -= skb_frag_size(&skb_shinfo(skb)->frags[i]);
 			skb->len += skb_frag_size(&skb_shinfo(skb)->frags[i]);
 			skb->data_len += skb_frag_size(&skb_shinfo(skb)->frags[i]);
@@ -3443,11 +3495,23 @@ static void pktgen_wait_for_skb(struct pktgen_dev *pkt_dev)
 
 static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 {
-	unsigned int burst = READ_ONCE(pkt_dev->burst);
+	bool skb_shared = !!(READ_ONCE(pkt_dev->flags) & F_SHARED);
 	struct net_device *odev = pkt_dev->odev;
 	struct netdev_queue *txq;
+	unsigned int burst = 1;
 	struct sk_buff *skb;
+	int clone_skb = 0;
 	int ret;
+
+	/* If 'skb_shared' is false, the read of possible
+	 * new values (if any) for 'burst' and 'clone_skb' will be skipped to
+	 * prevent some concurrent changes from slipping in. And the stabilized
+	 * config will be read in during the next run of pktgen_xmit.
+	 */
+	if (skb_shared) {
+		burst = READ_ONCE(pkt_dev->burst);
+		clone_skb = READ_ONCE(pkt_dev->clone_skb);
+	}
 
 	/* If device is offline, then don't send */
 	if (unlikely(!netif_running(odev) || !netif_carrier_ok(odev))) {
@@ -3465,7 +3529,7 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 
 	/* If no skb or clone count exhausted then get new one */
 	if (!pkt_dev->skb || (pkt_dev->last_ok &&
-			      ++pkt_dev->clone_count >= pkt_dev->clone_skb)) {
+			      ++pkt_dev->clone_count >= clone_skb)) {
 		/* build a new pkt */
 		kfree_skb(pkt_dev->skb);
 
@@ -3486,7 +3550,8 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 	if (pkt_dev->xmit_mode == M_NETIF_RECEIVE) {
 		skb = pkt_dev->skb;
 		skb->protocol = eth_type_trans(skb, skb->dev);
-		refcount_add(burst, &skb->users);
+		if (skb_shared)
+			refcount_add(burst, &skb->users);
 		local_bh_disable();
 		do {
 			ret = netif_receive_skb(skb);
@@ -3494,6 +3559,10 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 				pkt_dev->errors++;
 			pkt_dev->sofar++;
 			pkt_dev->seq_num++;
+			if (unlikely(!skb_shared)) {
+				pkt_dev->skb = NULL;
+				break;
+			}
 			if (refcount_read(&skb->users) != burst) {
 				/* skb was queued by rps/rfs or taps,
 				 * so cannot reuse this skb
@@ -3512,9 +3581,14 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 		goto out; /* Skips xmit_mode M_START_XMIT */
 	} else if (pkt_dev->xmit_mode == M_QUEUE_XMIT) {
 		local_bh_disable();
-		refcount_inc(&pkt_dev->skb->users);
+		if (skb_shared)
+			refcount_inc(&pkt_dev->skb->users);
 
 		ret = dev_queue_xmit(pkt_dev->skb);
+
+		if (!skb_shared && dev_xmit_complete(ret))
+			pkt_dev->skb = NULL;
+
 		switch (ret) {
 		case NET_XMIT_SUCCESS:
 			pkt_dev->sofar++;
@@ -3552,10 +3626,14 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 		pkt_dev->last_ok = 0;
 		goto unlock;
 	}
-	refcount_add(burst, &pkt_dev->skb->users);
+	if (skb_shared)
+		refcount_add(burst, &pkt_dev->skb->users);
 
 xmit_more:
 	ret = netdev_start_xmit(pkt_dev->skb, odev, txq, --burst > 0);
+
+	if (!skb_shared && dev_xmit_complete(ret))
+		pkt_dev->skb = NULL;
 
 	switch (ret) {
 	case NETDEV_TX_OK:
@@ -3578,7 +3656,8 @@ xmit_more:
 		fallthrough;
 	case NETDEV_TX_BUSY:
 		/* Retry it next time */
-		refcount_dec(&(pkt_dev->skb->users));
+		if (skb_shared)
+			refcount_dec(&pkt_dev->skb->users);
 		pkt_dev->last_ok = 0;
 	}
 	if (unlikely(burst))
@@ -3591,7 +3670,8 @@ out:
 
 	/* If pkt_dev->count is zero, then run forever */
 	if ((pkt_dev->count != 0) && (pkt_dev->sofar >= pkt_dev->count)) {
-		pktgen_wait_for_skb(pkt_dev);
+		if (pkt_dev->skb)
+			pktgen_wait_for_skb(pkt_dev);
 
 		/* Done with this */
 		pktgen_stop_device(pkt_dev);
@@ -3608,7 +3688,7 @@ static int pktgen_thread_worker(void *arg)
 	struct pktgen_dev *pkt_dev = NULL;
 	int cpu = t->cpu;
 
-	WARN_ON(smp_processor_id() != cpu);
+	WARN_ON_ONCE(smp_processor_id() != cpu);
 
 	init_waitqueue_head(&t->queue);
 	complete(&t->start_done);
@@ -3623,10 +3703,8 @@ static int pktgen_thread_worker(void *arg)
 		if (unlikely(!pkt_dev && t->control == 0)) {
 			if (t->net->pktgen_exiting)
 				break;
-			wait_event_interruptible_timeout(t->queue,
-							 t->control != 0,
-							 HZ/10);
-			try_to_freeze();
+			wait_event_freezable_timeout(t->queue,
+						     t->control != 0, HZ / 10);
 			continue;
 		}
 
@@ -3774,6 +3852,7 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 	pkt_dev->svlan_id = 0xffff;
 	pkt_dev->burst = 1;
 	pkt_dev->node = NUMA_NO_NODE;
+	pkt_dev->flags = F_SHARED;	/* SKB shared by default */
 
 	err = pktgen_setup_dev(t->net, pkt_dev, ifname);
 	if (err)
@@ -3793,8 +3872,8 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 	pkt_dev->ipsmode = XFRM_MODE_TRANSPORT;
 	pkt_dev->ipsproto = IPPROTO_ESP;
 
-	/* xfrm tunnel mode needs additional dst to extract outter
-	 * ip header protocol/ttl/id field, here creat a phony one.
+	/* xfrm tunnel mode needs additional dst to extract outer
+	 * ip header protocol/ttl/id field, here create a phony one.
 	 * instead of looking for a valid rt, which definitely hurting
 	 * performance under such circumstance.
 	 */
@@ -3838,17 +3917,14 @@ static int __net_init pktgen_create_thread(int cpu, struct pktgen_net *pn)
 	list_add_tail(&t->th_list, &pn->pktgen_threads);
 	init_completion(&t->start_done);
 
-	p = kthread_create_on_node(pktgen_thread_worker,
-				   t,
-				   cpu_to_node(cpu),
-				   "kpktgend_%d", cpu);
+	p = kthread_create_on_cpu(pktgen_thread_worker, t, cpu, "kpktgend_%d");
 	if (IS_ERR(p)) {
 		pr_err("kthread_create_on_node() failed for cpu %d\n", t->cpu);
 		list_del(&t->th_list);
 		kfree(t);
 		return PTR_ERR(p);
 	}
-	kthread_bind(p, cpu);
+
 	t->tsk = p;
 
 	pe = proc_create_data(t->tsk->comm, 0600, pn->proc_dir,
@@ -3944,6 +4020,7 @@ static int __net_init pg_net_init(struct net *net)
 		goto remove;
 	}
 
+	cpus_read_lock();
 	for_each_online_cpu(cpu) {
 		int err;
 
@@ -3952,6 +4029,7 @@ static int __net_init pg_net_init(struct net *net)
 			pr_warn("Cannot create thread for cpu %d (%d)\n",
 				   cpu, err);
 	}
+	cpus_read_unlock();
 
 	if (list_empty(&pn->pktgen_threads)) {
 		pr_err("Initialization failed for all threads\n");
@@ -3985,8 +4063,7 @@ static void __net_exit pg_net_exit(struct net *net)
 	list_for_each_safe(q, n, &list) {
 		t = list_entry(q, struct pktgen_thread, th_list);
 		list_del(&t->th_list);
-		kthread_stop(t->tsk);
-		put_task_struct(t->tsk);
+		kthread_stop_put(t->tsk);
 		kfree(t);
 	}
 

@@ -58,9 +58,6 @@ static inline u64 get_vtb(void)
  */
 static inline u64 get_dec(void)
 {
-	if (IS_ENABLED(CONFIG_40x))
-		return mfspr(SPRN_PIT);
-
 	return mfspr(SPRN_DEC);
 }
 
@@ -71,9 +68,7 @@ static inline u64 get_dec(void)
  */
 static inline void set_dec(u64 val)
 {
-	if (IS_ENABLED(CONFIG_40x))
-		mtspr(SPRN_PIT, (u32)val);
-	else if (IS_ENABLED(CONFIG_BOOKE))
+	if (IS_ENABLED(CONFIG_BOOKE))
 		mtspr(SPRN_DEC, val);
 	else
 		mtspr(SPRN_DEC, val - 1);
@@ -91,11 +86,8 @@ static inline unsigned long tb_ticks_since(unsigned long tstamp)
 #define mulhdu(x,y) \
 ({unsigned long z; asm ("mulhdu %0,%1,%2" : "=r" (z) : "r" (x), "r" (y)); z;})
 #else
-extern u64 mulhdu(u64, u64);
+#define mulhdu(x, y)	mul_u64_u64_shr(x, y, 64)
 #endif
-
-extern void div128_by_32(u64 dividend_high, u64 dividend_low,
-			 unsigned divisor, struct div_result *dr);
 
 extern void secondary_cpu_time_init(void);
 extern void __init time_init(void);
@@ -116,8 +108,9 @@ unsigned long long tb_to_ns(unsigned long long tb_ticks);
 
 void timer_broadcast_interrupt(void);
 
-/* SPLPAR */
-void accumulate_stolen_time(void);
+/* SPLPAR and VIRT_CPU_ACCOUNTING_NATIVE */
+void pseries_accumulate_stolen_time(void);
+u64 pseries_calculate_stolen_time(u64 stop_tb);
 
 #endif /* __KERNEL__ */
 #endif /* __POWERPC_TIME_H */

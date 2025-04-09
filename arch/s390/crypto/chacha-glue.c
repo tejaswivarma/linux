@@ -15,14 +15,14 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/sizes.h>
-#include <asm/fpu/api.h>
+#include <asm/fpu.h>
 #include "chacha-s390.h"
 
 static void chacha20_crypt_s390(u32 *state, u8 *dst, const u8 *src,
 				unsigned int nbytes, const u32 *key,
 				u32 *counter)
 {
-	struct kernel_fpu vxstate;
+	DECLARE_KERNEL_FPU_ONSTACK32(vxstate);
 
 	kernel_fpu_begin(&vxstate, KERNEL_VXR);
 	chacha20_vx(dst, src, nbytes, key, counter);
@@ -41,7 +41,7 @@ static int chacha20_s390(struct skcipher_request *req)
 	int rc;
 
 	rc = skcipher_walk_virt(&walk, req, false);
-	chacha_init_generic(state, ctx->key, req->iv);
+	chacha_init(state, ctx->key, req->iv);
 
 	while (walk.nbytes > 0) {
 		nbytes = walk.nbytes;
@@ -69,12 +69,6 @@ void hchacha_block_arch(const u32 *state, u32 *stream, int nrounds)
 }
 EXPORT_SYMBOL(hchacha_block_arch);
 
-void chacha_init_arch(u32 *state, const u32 *key, const u8 *iv)
-{
-	chacha_init_generic(state, key, iv);
-}
-EXPORT_SYMBOL(chacha_init_arch);
-
 void chacha_crypt_arch(u32 *state, u8 *dst, const u8 *src,
 		       unsigned int bytes, int nrounds)
 {
@@ -82,7 +76,7 @@ void chacha_crypt_arch(u32 *state, u8 *dst, const u8 *src,
 	 * it cannot handle a block of data or less, but otherwise
 	 * it can handle data of arbitrary size
 	 */
-	if (bytes <= CHACHA_BLOCK_SIZE || nrounds != 20)
+	if (bytes <= CHACHA_BLOCK_SIZE || nrounds != 20 || !cpu_has_vx())
 		chacha_crypt_generic(state, dst, src, bytes, nrounds);
 	else
 		chacha20_crypt_s390(state, dst, src, bytes,

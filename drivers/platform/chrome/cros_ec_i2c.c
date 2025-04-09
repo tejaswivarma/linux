@@ -286,8 +286,7 @@ done:
 	return ret;
 }
 
-static int cros_ec_i2c_probe(struct i2c_client *client,
-			     const struct i2c_device_id *dev_id)
+static int cros_ec_i2c_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct cros_ec_device *ec_dev = NULL;
@@ -306,7 +305,8 @@ static int cros_ec_i2c_probe(struct i2c_client *client,
 	ec_dev->phys_name = client->adapter->name;
 	ec_dev->din_size = sizeof(struct ec_host_response_i2c) +
 			   sizeof(struct ec_response_get_protocol_info);
-	ec_dev->dout_size = sizeof(struct ec_host_request_i2c);
+	ec_dev->dout_size = sizeof(struct ec_host_request_i2c) +
+			    sizeof(struct ec_params_rwsig_action);
 
 	err = cros_ec_register(ec_dev);
 	if (err) {
@@ -317,13 +317,11 @@ static int cros_ec_i2c_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int cros_ec_i2c_remove(struct i2c_client *client)
+static void cros_ec_i2c_remove(struct i2c_client *client)
 {
 	struct cros_ec_device *ec_dev = i2c_get_clientdata(client);
 
 	cros_ec_unregister(ec_dev);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -355,7 +353,7 @@ MODULE_DEVICE_TABLE(of, cros_ec_i2c_of_match);
 #endif
 
 static const struct i2c_device_id cros_ec_i2c_id[] = {
-	{ "cros-ec-i2c", 0 },
+	{ "cros-ec-i2c" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, cros_ec_i2c_id);

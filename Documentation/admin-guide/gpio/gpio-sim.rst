@@ -71,7 +71,7 @@ specific lines. The name of those subdirectories must take the form of:
 ``'line<offset>'`` (e.g. ``'line0'``, ``'line20'``, etc.) as the name will be
 used by the module to assign the config to the specific line at given offset.
 
-Once the confiuration is complete, the ``'live'`` attribute must be set to 1 in
+Once the configuration is complete, the ``'live'`` attribute must be set to 1 in
 order to instantiate the chip. It can be set back to 0 to destroy the simulated
 chip. The module will synchronously wait for the new simulated device to be
 successfully probed and if this doesn't happen, writing to ``'live'`` will
@@ -123,7 +123,7 @@ Each simulated GPIO chip creates a separate sysfs group under its device
 directory for each exposed line
 (e.g. ``/sys/devices/platform/gpio-sim.X/gpiochipY/``). The name of each group
 is of the form: ``'sim_gpioX'`` where X is the offset of the line. Inside each
-group there are two attibutes:
+group there are two attributes:
 
     ``pull`` - allows to read and set the current simulated pull setting for
                every line, when writing the value must be one of: ``'pull-up'``,

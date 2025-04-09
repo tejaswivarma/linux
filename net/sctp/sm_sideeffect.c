@@ -734,7 +734,7 @@ static void sctp_cmd_hb_timers_stop(struct sctp_cmd_seq *cmds,
 
 	list_for_each_entry(t, &asoc->peer.transport_addr_list,
 			transports) {
-		if (del_timer(&t->hb_timer))
+		if (timer_delete(&t->hb_timer))
 			sctp_transport_put(t);
 	}
 }
@@ -747,7 +747,7 @@ static void sctp_cmd_t3_rtx_timers_stop(struct sctp_cmd_seq *cmds,
 
 	list_for_each_entry(t, &asoc->peer.transport_addr_list,
 			transports) {
-		if (del_timer(&t->T3_rtx_timer))
+		if (timer_delete(&t->T3_rtx_timer))
 			sctp_transport_put(t);
 	}
 }
@@ -984,8 +984,7 @@ static void sctp_cmd_process_operr(struct sctp_cmd_seq *cmds,
 		{
 			struct sctp_chunkhdr *unk_chunk_hdr;
 
-			unk_chunk_hdr = (struct sctp_chunkhdr *)
-							err_hdr->variable;
+			unk_chunk_hdr = (struct sctp_chunkhdr *)(err_hdr + 1);
 			switch (unk_chunk_hdr->type) {
 			/* ADDIP 4.1 A9) If the peer responds to an ASCONF with
 			 * an ERROR chunk reporting that it did not recognized
@@ -1251,7 +1250,10 @@ static int sctp_side_effects(enum sctp_event_type event_type,
 	default:
 		pr_err("impossible disposition %d in state %d, event_type %d, event_id %d\n",
 		       status, state, event_type, subtype.chunk);
-		BUG();
+		error = status;
+		if (error >= 0)
+			error = -EINVAL;
+		WARN_ON_ONCE(1);
 		break;
 	}
 
@@ -1555,7 +1557,7 @@ static int sctp_cmd_interpreter(enum sctp_event_type event_type,
 
 		case SCTP_CMD_TIMER_STOP:
 			timer = &asoc->timers[cmd->obj.to];
-			if (del_timer(timer))
+			if (timer_delete(timer))
 				sctp_association_put(asoc);
 			break;
 

@@ -250,7 +250,6 @@ static struct lpc18xx_cgu_base_clk lpc18xx_cgu_base_clks[] = {
 struct lpc18xx_pll {
 	struct		clk_hw hw;
 	void __iomem	*reg;
-	spinlock_t	*lock;
 	u8		flags;
 };
 
@@ -606,7 +605,7 @@ static void __init lpc18xx_cgu_register_source_clks(struct device_node *np,
 	if (IS_ERR(clk))
 		pr_warn("%s: failed to register irc clk\n", __func__);
 
-	/* Register crystal oscillator controlller */
+	/* Register crystal oscillator controller */
 	parents[0] = of_clk_get_parent_name(np, 0);
 	clk = clk_register_gate(NULL, clk_src_names[CLK_SRC_OSC], parents[0],
 				0, base + LPC18XX_CGU_XTAL_OSC_CTRL,

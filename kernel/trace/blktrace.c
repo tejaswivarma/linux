@@ -320,8 +320,8 @@ static void blk_trace_free(struct request_queue *q, struct blk_trace *bt)
 	 * under 'q->debugfs_dir', thus lookup and remove them.
 	 */
 	if (!bt->dir) {
-		debugfs_remove(debugfs_lookup("dropped", q->debugfs_dir));
-		debugfs_remove(debugfs_lookup("msg", q->debugfs_dir));
+		debugfs_lookup_and_remove("dropped", q->debugfs_dir);
+		debugfs_lookup_and_remove("msg", q->debugfs_dir);
 	} else {
 		debugfs_remove(bt->dir);
 	}
@@ -346,8 +346,40 @@ static void put_probe_ref(void)
 	mutex_unlock(&blk_probe_mutex);
 }
 
+static int blk_trace_start(struct blk_trace *bt)
+{
+	if (bt->trace_state != Blktrace_setup &&
+	    bt->trace_state != Blktrace_stopped)
+		return -EINVAL;
+
+	blktrace_seq++;
+	smp_mb();
+	bt->trace_state = Blktrace_running;
+	raw_spin_lock_irq(&running_trace_lock);
+	list_add(&bt->running_list, &running_trace_list);
+	raw_spin_unlock_irq(&running_trace_lock);
+	trace_note_time(bt);
+
+	return 0;
+}
+
+static int blk_trace_stop(struct blk_trace *bt)
+{
+	if (bt->trace_state != Blktrace_running)
+		return -EINVAL;
+
+	bt->trace_state = Blktrace_stopped;
+	raw_spin_lock_irq(&running_trace_lock);
+	list_del_init(&bt->running_list);
+	raw_spin_unlock_irq(&running_trace_lock);
+	relay_flush(bt->rchan);
+
+	return 0;
+}
+
 static void blk_trace_cleanup(struct request_queue *q, struct blk_trace *bt)
 {
+	blk_trace_stop(bt);
 	synchronize_rcu();
 	blk_trace_free(q, bt);
 	put_probe_ref();
@@ -362,8 +394,7 @@ static int __blk_trace_remove(struct request_queue *q)
 	if (!bt)
 		return -EINVAL;
 
-	if (bt->trace_state != Blktrace_running)
-		blk_trace_cleanup(q, bt);
+	blk_trace_cleanup(q, bt);
 
 	return 0;
 }
@@ -493,8 +524,7 @@ static int do_blk_trace_setup(struct request_queue *q, char *name, dev_t dev,
 	if (!buts->buf_size || !buts->buf_nr)
 		return -EINVAL;
 
-	strncpy(buts->name, name, BLKTRACE_BDEV_SIZE);
-	buts->name[BLKTRACE_BDEV_SIZE - 1] = '\0';
+	strscpy_pad(buts->name, name, BLKTRACE_BDEV_SIZE);
 
 	/*
 	 * some device names have larger paths - convert the slashes
@@ -587,8 +617,9 @@ err:
 	return ret;
 }
 
-static int __blk_trace_setup(struct request_queue *q, char *name, dev_t dev,
-			     struct block_device *bdev, char __user *arg)
+int blk_trace_setup(struct request_queue *q, char *name, dev_t dev,
+		    struct block_device *bdev,
+		    char __user *arg)
 {
 	struct blk_user_trace_setup buts;
 	int ret;
@@ -597,28 +628,17 @@ static int __blk_trace_setup(struct request_queue *q, char *name, dev_t dev,
 	if (ret)
 		return -EFAULT;
 
+	mutex_lock(&q->debugfs_mutex);
 	ret = do_blk_trace_setup(q, name, dev, bdev, &buts);
+	mutex_unlock(&q->debugfs_mutex);
 	if (ret)
 		return ret;
 
 	if (copy_to_user(arg, &buts, sizeof(buts))) {
-		__blk_trace_remove(q);
+		blk_trace_remove(q);
 		return -EFAULT;
 	}
 	return 0;
-}
-
-int blk_trace_setup(struct request_queue *q, char *name, dev_t dev,
-		    struct block_device *bdev,
-		    char __user *arg)
-{
-	int ret;
-
-	mutex_lock(&q->debugfs_mutex);
-	ret = __blk_trace_setup(q, name, dev, bdev, arg);
-	mutex_unlock(&q->debugfs_mutex);
-
-	return ret;
 }
 EXPORT_SYMBOL_GPL(blk_trace_setup);
 
@@ -643,12 +663,14 @@ static int compat_blk_trace_setup(struct request_queue *q, char *name,
 		.pid = cbuts.pid,
 	};
 
+	mutex_lock(&q->debugfs_mutex);
 	ret = do_blk_trace_setup(q, name, dev, bdev, &buts);
+	mutex_unlock(&q->debugfs_mutex);
 	if (ret)
 		return ret;
 
 	if (copy_to_user(arg, &buts.name, ARRAY_SIZE(buts.name))) {
-		__blk_trace_remove(q);
+		blk_trace_remove(q);
 		return -EFAULT;
 	}
 
@@ -658,7 +680,6 @@ static int compat_blk_trace_setup(struct request_queue *q, char *name,
 
 static int __blk_trace_startstop(struct request_queue *q, int start)
 {
-	int ret;
 	struct blk_trace *bt;
 
 	bt = rcu_dereference_protected(q->blk_trace,
@@ -666,36 +687,10 @@ static int __blk_trace_startstop(struct request_queue *q, int start)
 	if (bt == NULL)
 		return -EINVAL;
 
-	/*
-	 * For starting a trace, we can transition from a setup or stopped
-	 * trace. For stopping a trace, the state must be running
-	 */
-	ret = -EINVAL;
-	if (start) {
-		if (bt->trace_state == Blktrace_setup ||
-		    bt->trace_state == Blktrace_stopped) {
-			blktrace_seq++;
-			smp_mb();
-			bt->trace_state = Blktrace_running;
-			raw_spin_lock_irq(&running_trace_lock);
-			list_add(&bt->running_list, &running_trace_list);
-			raw_spin_unlock_irq(&running_trace_lock);
-
-			trace_note_time(bt);
-			ret = 0;
-		}
-	} else {
-		if (bt->trace_state == Blktrace_running) {
-			bt->trace_state = Blktrace_stopped;
-			raw_spin_lock_irq(&running_trace_lock);
-			list_del_init(&bt->running_list);
-			raw_spin_unlock_irq(&running_trace_lock);
-			relay_flush(bt->rchan);
-			ret = 0;
-		}
-	}
-
-	return ret;
+	if (start)
+		return blk_trace_start(bt);
+	else
+		return blk_trace_stop(bt);
 }
 
 int blk_trace_startstop(struct request_queue *q, int start)
@@ -717,7 +712,7 @@ EXPORT_SYMBOL_GPL(blk_trace_startstop);
  */
 
 /**
- * blk_trace_ioctl: - handle the ioctls associated with tracing
+ * blk_trace_ioctl - handle the ioctls associated with tracing
  * @bdev:	the block device
  * @cmd:	the ioctl cmd
  * @arg:	the argument data, if any
@@ -725,20 +720,14 @@ EXPORT_SYMBOL_GPL(blk_trace_startstop);
  **/
 int blk_trace_ioctl(struct block_device *bdev, unsigned cmd, char __user *arg)
 {
-	struct request_queue *q;
+	struct request_queue *q = bdev_get_queue(bdev);
 	int ret, start = 0;
 	char b[BDEVNAME_SIZE];
-
-	q = bdev_get_queue(bdev);
-	if (!q)
-		return -ENXIO;
-
-	mutex_lock(&q->debugfs_mutex);
 
 	switch (cmd) {
 	case BLKTRACESETUP:
 		snprintf(b, sizeof(b), "%pg", bdev);
-		ret = __blk_trace_setup(q, b, bdev->bd_dev, bdev, arg);
+		ret = blk_trace_setup(q, b, bdev->bd_dev, bdev, arg);
 		break;
 #if defined(CONFIG_COMPAT) && defined(CONFIG_X86_64)
 	case BLKTRACESETUP32:
@@ -750,32 +739,28 @@ int blk_trace_ioctl(struct block_device *bdev, unsigned cmd, char __user *arg)
 		start = 1;
 		fallthrough;
 	case BLKTRACESTOP:
-		ret = __blk_trace_startstop(q, start);
+		ret = blk_trace_startstop(q, start);
 		break;
 	case BLKTRACETEARDOWN:
-		ret = __blk_trace_remove(q);
+		ret = blk_trace_remove(q);
 		break;
 	default:
 		ret = -ENOTTY;
 		break;
 	}
-
-	mutex_unlock(&q->debugfs_mutex);
 	return ret;
 }
 
 /**
- * blk_trace_shutdown: - stop and cleanup trace structures
+ * blk_trace_shutdown - stop and cleanup trace structures
  * @q:    the request queue associated with the device
  *
  **/
 void blk_trace_shutdown(struct request_queue *q)
 {
 	if (rcu_dereference_protected(q->blk_trace,
-				      lockdep_is_held(&q->debugfs_mutex))) {
-		__blk_trace_startstop(q, 0);
+				      lockdep_is_held(&q->debugfs_mutex)))
 		__blk_trace_remove(q);
-	}
 }
 
 #ifdef CONFIG_BLK_CGROUP
@@ -1546,7 +1531,8 @@ blk_trace_event_print_binary(struct trace_iterator *iter, int flags,
 
 static enum print_line_t blk_tracer_print_line(struct trace_iterator *iter)
 {
-	if (!(blk_tracer_flags.val & TRACE_BLK_OPT_CLASSIC))
+	if ((iter->ent->type != TRACE_BLK) ||
+	    !(blk_tracer_flags.val & TRACE_BLK_OPT_CLASSIC))
 		return TRACE_TYPE_UNHANDLED;
 
 	return print_one_line(iter, true);
@@ -1614,13 +1600,7 @@ static int blk_trace_remove_queue(struct request_queue *q)
 	if (bt == NULL)
 		return -EINVAL;
 
-	if (bt->trace_state == Blktrace_running) {
-		bt->trace_state = Blktrace_stopped;
-		raw_spin_lock_irq(&running_trace_lock);
-		list_del_init(&bt->running_list);
-		raw_spin_unlock_irq(&running_trace_lock);
-		relay_flush(bt->rchan);
-	}
+	blk_trace_stop(bt);
 
 	put_probe_ref();
 	synchronize_rcu();

@@ -733,10 +733,10 @@ static int cs42l52_set_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 	u8 iface = 0;
 
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBM_CFM:
+	case SND_SOC_DAIFMT_CBP_CFP:
 		iface = CS42L52_IFACE_CTL1_MASTER;
 		break;
-	case SND_SOC_DAIFMT_CBS_CFS:
+	case SND_SOC_DAIFMT_CBC_CFC:
 		iface = CS42L52_IFACE_CTL1_SLAVE;
 		break;
 	default:
@@ -1084,7 +1084,7 @@ static const struct regmap_config cs42l52_regmap = {
 	.num_reg_defaults = ARRAY_SIZE(cs42l52_reg_defaults),
 	.readable_reg = cs42l52_readable_register,
 	.volatile_reg = cs42l52_volatile_register,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static int cs42l52_i2c_probe(struct i2c_client *i2c_client)
@@ -1215,7 +1215,7 @@ MODULE_DEVICE_TABLE(of, cs42l52_of_match);
 
 
 static const struct i2c_device_id cs42l52_id[] = {
-	{ "cs42l52", 0 },
+	{ "cs42l52" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, cs42l52_id);
@@ -1226,7 +1226,7 @@ static struct i2c_driver cs42l52_i2c_driver = {
 		.of_match_table = cs42l52_of_match,
 	},
 	.id_table = cs42l52_id,
-	.probe_new = cs42l52_i2c_probe,
+	.probe = cs42l52_i2c_probe,
 };
 
 module_i2c_driver(cs42l52_i2c_driver);

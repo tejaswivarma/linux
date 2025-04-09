@@ -25,14 +25,6 @@
 
 #include "amdgpu_smu.h"
 
-#define SMU13_DRIVER_IF_VERSION_INV 0xFFFFFFFF
-#define SMU13_DRIVER_IF_VERSION_YELLOW_CARP 0x04
-#define SMU13_DRIVER_IF_VERSION_ALDE 0x08
-#define SMU13_DRIVER_IF_VERSION_SMU_V13_0_4 0x05
-#define SMU13_DRIVER_IF_VERSION_SMU_V13_0_5 0x04
-#define SMU13_DRIVER_IF_VERSION_SMU_V13_0_0 0x2C
-#define SMU13_DRIVER_IF_VERSION_SMU_V13_0_7 0x2C
-
 #define SMU13_MODE1_RESET_WAIT_TIME_IN_MS 500  //500ms
 
 /* MP Apertures */
@@ -58,6 +50,18 @@
 #define CTF_OFFSET_EDGE			5
 #define CTF_OFFSET_HOTSPOT		5
 #define CTF_OFFSET_MEM			5
+
+#define SMU_13_VCLK_SHIFT		16
+
+#define SMUQ10_TO_UINT(x) ((x) >> 10)
+#define SMUQ10_FRAC(x) ((x) & 0x3ff)
+#define SMUQ10_ROUND(x) ((SMUQ10_TO_UINT(x)) + ((SMUQ10_FRAC(x)) >= 0x200))
+
+extern const int pmfw_decoded_link_speed[5];
+extern const int pmfw_decoded_link_width[7];
+
+#define DECODE_GEN_SPEED(gen_speed_idx)		(pmfw_decoded_link_speed[gen_speed_idx])
+#define DECODE_LANE_WIDTH(lane_width_idx)	(pmfw_decoded_link_width[lane_width_idx])
 
 struct smu_13_0_max_sustainable_clocks {
 	uint32_t display_clock;
@@ -107,6 +111,7 @@ struct smu_13_0_dpm_context {
 	struct smu_13_0_dpm_tables  dpm_tables;
 	uint32_t                    workload_policy_mask;
 	uint32_t                    dcef_min_ds_clk;
+	uint64_t                    caps;
 };
 
 enum smu_13_0_power_state {
@@ -121,14 +126,7 @@ struct smu_13_0_power_context {
 	uint32_t	power_source;
 	uint8_t		in_power_limit_boost_mode;
 	enum smu_13_0_power_state power_state;
-};
-
-enum smu_v13_0_baco_seq {
-	BACO_SEQ_BACO = 0,
-	BACO_SEQ_MSR,
-	BACO_SEQ_BAMACO,
-	BACO_SEQ_ULPS,
-	BACO_SEQ_COUNT,
+	atomic_t	throttle_status;
 };
 
 #if defined(SWSMU_CODE_LAYER_L2) || defined(SWSMU_CODE_LAYER_L3)
@@ -217,11 +215,7 @@ int smu_v13_0_set_azalia_d3_pme(struct smu_context *smu);
 int smu_v13_0_get_max_sustainable_clocks_by_dc(struct smu_context *smu,
 					       struct pp_smu_nv_clock_table *max_clocks);
 
-bool smu_v13_0_baco_is_support(struct smu_context *smu);
-
-enum smu_baco_state smu_v13_0_baco_get_state(struct smu_context *smu);
-
-int smu_v13_0_baco_set_state(struct smu_context *smu, enum smu_baco_state state);
+int smu_v13_0_get_bamaco_support(struct smu_context *smu);
 
 int smu_v13_0_baco_enter(struct smu_context *smu);
 int smu_v13_0_baco_exit(struct smu_context *smu);
@@ -230,7 +224,7 @@ int smu_v13_0_get_dpm_ultimate_freq(struct smu_context *smu, enum smu_clk_type c
 				    uint32_t *min, uint32_t *max);
 
 int smu_v13_0_set_soft_freq_limited_range(struct smu_context *smu, enum smu_clk_type clk_type,
-					  uint32_t min, uint32_t max);
+					  uint32_t min, uint32_t max, bool automatic);
 
 int smu_v13_0_set_hard_freq_limited_range(struct smu_context *smu,
 					  enum smu_clk_type clk_type,
@@ -247,10 +241,9 @@ int smu_v13_0_set_single_dpm_table(struct smu_context *smu,
 				   enum smu_clk_type clk_type,
 				   struct smu_13_0_dpm_table *single_dpm_table);
 
-int smu_v13_0_get_dpm_level_range(struct smu_context *smu,
-				  enum smu_clk_type clk_type,
-				  uint32_t *min_value,
-				  uint32_t *max_value);
+int smu_v13_0_get_dpm_freq_by_index(struct smu_context *smu,
+				    enum smu_clk_type clk_type, uint16_t level,
+				    uint32_t *value);
 
 int smu_v13_0_get_current_pcie_link_width_level(struct smu_context *smu);
 
@@ -267,7 +260,8 @@ int smu_v13_0_wait_for_event(struct smu_context *smu, enum smu_event_type event,
 			     uint64_t event_arg);
 
 int smu_v13_0_set_vcn_enable(struct smu_context *smu,
-			     bool enable);
+			      bool enable,
+			      int inst);
 
 int smu_v13_0_set_jpeg_enable(struct smu_context *smu,
 			      bool enable);
@@ -275,6 +269,9 @@ int smu_v13_0_set_jpeg_enable(struct smu_context *smu,
 int smu_v13_0_init_pptable_microcode(struct smu_context *smu);
 
 int smu_v13_0_run_btc(struct smu_context *smu);
+
+int smu_v13_0_gpo_control(struct smu_context *smu,
+			  bool enablement);
 
 int smu_v13_0_deep_sleep_control(struct smu_context *smu,
 				 bool enablement);
@@ -291,5 +288,36 @@ int smu_v13_0_set_default_dpm_tables(struct smu_context *smu);
 void smu_v13_0_set_smu_mailbox_registers(struct smu_context *smu);
 
 int smu_v13_0_mode1_reset(struct smu_context *smu);
+
+int smu_v13_0_get_pptable_from_firmware(struct smu_context *smu,
+					void **table,
+					uint32_t *size,
+					uint32_t pptable_id);
+
+int smu_v13_0_update_pcie_parameters(struct smu_context *smu,
+				     uint8_t pcie_gen_cap,
+				     uint8_t pcie_width_cap);
+
+int smu_v13_0_disable_pmfw_state(struct smu_context *smu);
+
+int smu_v13_0_enable_uclk_shadow(struct smu_context *smu, bool enable);
+
+int smu_v13_0_set_wbrf_exclusion_ranges(struct smu_context *smu,
+						 struct freq_band_range *exclusion_ranges);
+
+int smu_v13_0_get_boot_freq_by_index(struct smu_context *smu,
+				     enum smu_clk_type clk_type,
+				     uint32_t *value);
+
+void smu_v13_0_interrupt_work(struct smu_context *smu);
+bool smu_v13_0_12_is_dpm_running(struct smu_context *smu);
+int smu_v13_0_12_get_max_metrics_size(void);
+int smu_v13_0_12_setup_driver_pptable(struct smu_context *smu);
+int smu_v13_0_12_get_smu_metrics_data(struct smu_context *smu,
+				      MetricsMember_t member,
+				      uint32_t *value);
+ssize_t smu_v13_0_12_get_gpu_metrics(struct smu_context *smu, void **table);
+extern const struct cmn2asic_mapping smu_v13_0_12_feature_mask_map[];
+extern const struct cmn2asic_msg_mapping smu_v13_0_12_message_map[];
 #endif
 #endif

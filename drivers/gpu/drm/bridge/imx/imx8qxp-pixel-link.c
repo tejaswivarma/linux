@@ -138,11 +138,6 @@ static int imx8qxp_pixel_link_bridge_attach(struct drm_bridge *bridge,
 		return -EINVAL;
 	}
 
-	if (!bridge->encoder) {
-		DRM_DEV_ERROR(pl->dev, "missing encoder\n");
-		return -ENODEV;
-	}
-
 	return drm_bridge_attach(bridge->encoder,
 				 pl->next_bridge, bridge,
 				 DRM_BRIDGE_ATTACH_NO_CONNECTOR);
@@ -158,9 +153,8 @@ imx8qxp_pixel_link_bridge_mode_set(struct drm_bridge *bridge,
 	imx8qxp_pixel_link_set_mst_addr(pl);
 }
 
-static void
-imx8qxp_pixel_link_bridge_atomic_enable(struct drm_bridge *bridge,
-					struct drm_bridge_state *old_bridge_state)
+static void imx8qxp_pixel_link_bridge_atomic_enable(struct drm_bridge *bridge,
+						    struct drm_atomic_state *state)
 {
 	struct imx8qxp_pixel_link *pl = bridge->driver_private;
 
@@ -169,9 +163,8 @@ imx8qxp_pixel_link_bridge_atomic_enable(struct drm_bridge *bridge,
 	imx8qxp_pixel_link_enable_sync(pl);
 }
 
-static void
-imx8qxp_pixel_link_bridge_atomic_disable(struct drm_bridge *bridge,
-					 struct drm_bridge_state *old_bridge_state)
+static void imx8qxp_pixel_link_bridge_atomic_disable(struct drm_bridge *bridge,
+						     struct drm_atomic_state *state)
 {
 	struct imx8qxp_pixel_link *pl = bridge->driver_private;
 
@@ -313,7 +306,7 @@ imx8qxp_pixel_link_find_next_bridge(struct imx8qxp_pixel_link *pl)
 		}
 
 		/* specially select the next bridge with companion PXL2DPI */
-		if (of_find_property(remote, "fsl,companion-pxl2dpi", NULL))
+		if (of_property_present(remote, "fsl,companion-pxl2dpi"))
 			bridge_sel = ep_cnt;
 
 		ep_cnt++;
@@ -398,13 +391,11 @@ static int imx8qxp_pixel_link_bridge_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int imx8qxp_pixel_link_bridge_remove(struct platform_device *pdev)
+static void imx8qxp_pixel_link_bridge_remove(struct platform_device *pdev)
 {
 	struct imx8qxp_pixel_link *pl = platform_get_drvdata(pdev);
 
 	drm_bridge_remove(&pl->bridge);
-
-	return 0;
 }
 
 static const struct of_device_id imx8qxp_pixel_link_dt_ids[] = {

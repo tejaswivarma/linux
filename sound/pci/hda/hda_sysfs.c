@@ -26,7 +26,6 @@ struct hda_hint {
 	const char *val;	/* contained in the same alloc as key */
 };
 
-#ifdef CONFIG_PM
 static ssize_t power_on_acct_show(struct device *dev,
 				  struct device_attribute *attr,
 				  char *buf)
@@ -47,7 +46,6 @@ static ssize_t power_off_acct_show(struct device *dev,
 
 static DEVICE_ATTR_RO(power_on_acct);
 static DEVICE_ATTR_RO(power_off_acct);
-#endif /* CONFIG_PM */
 
 #define CODEC_INFO_SHOW(type, field)				\
 static ssize_t type##_show(struct device *dev,			\
@@ -375,8 +373,6 @@ static ssize_t user_pin_configs_show(struct device *dev,
 	return pin_configs_show(codec, &codec->user_pins, buf);
 }
 
-#define MAX_PIN_CONFIGS		32
-
 static int parse_user_pin_configs(struct hda_codec *codec, const char *buf)
 {
 	int nid, cfg, err;
@@ -652,7 +648,7 @@ static const struct hda_patch_item patch_items[NUM_LINE_MODES] = {
 	},
 };
 
-/* check the line starting with '[' -- change the parser mode accodingly */
+/* check the line starting with '[' -- change the parser mode accordingly */
 static int parse_line_mode(char *buf, struct hda_bus *bus)
 {
 	int i;
@@ -747,10 +743,8 @@ static struct attribute *hda_dev_attrs[] = {
 	&dev_attr_modelname.attr,
 	&dev_attr_init_pin_configs.attr,
 	&dev_attr_driver_pin_configs.attr,
-#ifdef CONFIG_PM
 	&dev_attr_power_on_acct.attr,
 	&dev_attr_power_off_acct.attr,
-#endif
 #ifdef CONFIG_SND_HDA_RECONFIG
 	&dev_attr_init_verbs.attr,
 	&dev_attr_hints.attr,

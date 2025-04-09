@@ -58,11 +58,6 @@ static int imx8qxp_pxl2dpi_bridge_attach(struct drm_bridge *bridge,
 		return -EINVAL;
 	}
 
-	if (!bridge->encoder) {
-		DRM_DEV_ERROR(p2d->dev, "missing encoder\n");
-		return -ENODEV;
-	}
-
 	return drm_bridge_attach(bridge->encoder,
 				 p2d->next_bridge, bridge,
 				 DRM_BRIDGE_ATTACH_NO_CONNECTOR);
@@ -127,9 +122,8 @@ imx8qxp_pxl2dpi_bridge_mode_set(struct drm_bridge *bridge,
 	}
 }
 
-static void
-imx8qxp_pxl2dpi_bridge_atomic_disable(struct drm_bridge *bridge,
-				      struct drm_bridge_state *old_bridge_state)
+static void imx8qxp_pxl2dpi_bridge_atomic_disable(struct drm_bridge *bridge,
+						  struct drm_atomic_state *state)
 {
 	struct imx8qxp_pxl2dpi *p2d = bridge->driver_private;
 	int ret;
@@ -139,8 +133,7 @@ imx8qxp_pxl2dpi_bridge_atomic_disable(struct drm_bridge *bridge,
 		DRM_DEV_ERROR(p2d->dev, "failed to put runtime PM: %d\n", ret);
 
 	if (p2d->companion)
-		p2d->companion->funcs->atomic_disable(p2d->companion,
-							old_bridge_state);
+		p2d->companion->funcs->atomic_disable(p2d->companion, state);
 }
 
 static const u32 imx8qxp_pxl2dpi_bus_output_fmts[] = {
@@ -455,15 +448,13 @@ static int imx8qxp_pxl2dpi_bridge_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int imx8qxp_pxl2dpi_bridge_remove(struct platform_device *pdev)
+static void imx8qxp_pxl2dpi_bridge_remove(struct platform_device *pdev)
 {
 	struct imx8qxp_pxl2dpi *p2d = platform_get_drvdata(pdev);
 
 	drm_bridge_remove(&p2d->bridge);
 
 	pm_runtime_disable(&pdev->dev);
-
-	return 0;
 }
 
 static const struct of_device_id imx8qxp_pxl2dpi_dt_ids[] = {

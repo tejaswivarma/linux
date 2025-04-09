@@ -333,6 +333,14 @@ int wl12xx_allocate_link(struct wl1271 *wl, struct wl12xx_vif *wlvif, u8 *hlid)
 	wl->links[link].wlvif = wlvif;
 
 	/*
+	 * Take the last sec_pn16 value from the current FW status. On recovery,
+	 * we might not have fw_status yet, and tx_lnk_sec_pn16[] will be NULL.
+	 */
+	if (wl->fw_status->counters.tx_lnk_sec_pn16)
+		wl->links[link].prev_sec_pn16 =
+			le16_to_cpu(wl->fw_status->counters.tx_lnk_sec_pn16[link]);
+
+	/*
 	 * Take saved value for total freed packets from wlvif, in case this is
 	 * recovery/resume
 	 */
@@ -360,6 +368,7 @@ void wl12xx_free_link(struct wl1271 *wl, struct wl12xx_vif *wlvif, u8 *hlid)
 
 	wl->links[*hlid].allocated_pkts = 0;
 	wl->links[*hlid].prev_freed_pkts = 0;
+	wl->links[*hlid].prev_sec_pn16 = 0;
 	wl->links[*hlid].ba_bitmap = 0;
 	eth_zero_addr(wl->links[*hlid].addr);
 
@@ -1065,7 +1074,7 @@ int wl12xx_cmd_build_null_data(struct wl1271 *wl, struct wl12xx_vif *wlvif)
 	} else {
 		skb = ieee80211_nullfunc_get(wl->hw,
 					     wl12xx_wlvif_to_vif(wlvif),
-					     false);
+					     -1, false);
 		if (!skb)
 			goto out;
 		size = skb->len;
@@ -1092,7 +1101,7 @@ int wl12xx_cmd_build_klv_null_data(struct wl1271 *wl,
 	struct sk_buff *skb = NULL;
 	int ret = -ENOMEM;
 
-	skb = ieee80211_nullfunc_get(wl->hw, vif, false);
+	skb = ieee80211_nullfunc_get(wl->hw, vif,-1, false);
 	if (!skb)
 		goto out;
 
@@ -1565,13 +1574,6 @@ int wl12xx_cmd_add_peer(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 	cmd->supported_rates =
 		cpu_to_le32(wl1271_tx_enabled_rates_get(wl, sta_rates,
 							wlvif->band));
-
-	if (!cmd->supported_rates) {
-		wl1271_debug(DEBUG_CMD,
-			     "peer has no supported rates yet, configuring basic rates: 0x%x",
-			     wlvif->basic_rate_set);
-		cmd->supported_rates = cpu_to_le32(wlvif->basic_rate_set);
-	}
 
 	wl1271_debug(DEBUG_CMD, "new peer rates=0x%x queues=0x%x",
 		     cmd->supported_rates, sta->uapsd_queues);

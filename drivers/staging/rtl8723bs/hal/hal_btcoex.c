@@ -6,7 +6,6 @@
  ******************************************************************************/
 
 #include <hal_data.h>
-#include <rtw_debug.h>
 #include <hal_btcoex.h>
 #include <Mp_Precomp.h>
 
@@ -1177,14 +1176,6 @@ bool hal_btcoex_IsBtDisabled(struct adapter *padapter)
 		return false;
 }
 
-void hal_btcoex_SetChipType(struct adapter *padapter, u8 chipType)
-{
-	struct hal_com_data *pHalData;
-
-
-	pHalData = GET_HAL_DATA(padapter);
-}
-
 void hal_btcoex_SetPgAntNum(struct adapter *padapter, u8 antNum)
 {
 	struct hal_com_data *pHalData;
@@ -1281,11 +1272,6 @@ void hal_btcoex_Handler(struct adapter *padapter)
 s32 hal_btcoex_IsBTCoexCtrlAMPDUSize(struct adapter *padapter)
 {
 	return (s32)GLBtCoexist.btInfo.bBtCtrlAggBufSize;
-}
-
-void hal_btcoex_SetManualControl(struct adapter *padapter, u8 bmanual)
-{
-	GLBtCoexist.bManualControl = bmanual;
 }
 
 bool hal_btcoex_IsBtControlLps(struct adapter *padapter)

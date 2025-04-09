@@ -81,7 +81,7 @@ struct ccs811_data {
 	/* Ensures correct alignment of timestamp if present */
 	struct {
 		s16 channels[2];
-		s64 ts __aligned(8);
+		aligned_s64 ts;
 	} scan;
 };
 
@@ -401,9 +401,9 @@ static int ccs811_reset(struct i2c_client *client)
 	return 0;
 }
 
-static int ccs811_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int ccs811_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct iio_dev *indio_dev;
 	struct ccs811_data *data;
 	int ret;
@@ -532,7 +532,7 @@ err_poweroff:
 	return ret;
 }
 
-static int ccs811_remove(struct i2c_client *client)
+static void ccs811_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct ccs811_data *data = iio_priv(indio_dev);
@@ -548,12 +548,10 @@ static int ccs811_remove(struct i2c_client *client)
 	if (ret)
 		dev_warn(&client->dev, "Failed to power down device (%pe)\n",
 			 ERR_PTR(ret));
-
-	return 0;
 }
 
 static const struct i2c_device_id ccs811_id[] = {
-	{"ccs811", 0},
+	{ "ccs811" },
 	{	}
 };
 MODULE_DEVICE_TABLE(i2c, ccs811_id);

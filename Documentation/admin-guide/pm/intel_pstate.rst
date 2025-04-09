@@ -696,6 +696,9 @@ of them have to be prepended with the ``intel_pstate=`` prefix.
 	Use per-logical-CPU P-State limits (see `Coordination of P-state
 	Limits`_ for details).
 
+``no_cas``
+	Do not enable capacity-aware scheduling (CAS) which is enabled by
+	default on hybrid systems.
 
 Diagnostics and Tuning
 ======================
@@ -712,7 +715,7 @@ it works in the `active mode <Active Mode_>`_.
 The following sequence of shell commands can be used to enable them and see
 their output (if the kernel is generally configured to support event tracing)::
 
- # cd /sys/kernel/debug/tracing/
+ # cd /sys/kernel/tracing/
  # echo 1 > events/power/pstate_sample/enable
  # echo 1 > events/power/cpu_frequency/enable
  # cat trace
@@ -732,7 +735,7 @@ The ``ftrace`` interface can be used for low-level diagnostics of
 P-state is called, the ``ftrace`` filter can be set to
 :c:func:`intel_pstate_set_pstate`::
 
- # cd /sys/kernel/debug/tracing/
+ # cd /sys/kernel/tracing/
  # cat available_filter_functions | grep -i pstate
  intel_pstate_set_pstate
  intel_pstate_cpu_init

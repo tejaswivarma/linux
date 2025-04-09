@@ -2,7 +2,7 @@
 //
 // tegra210_ahub.c - Tegra210 AHUB driver
 //
-// Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+// Copyright (c) 2020-2024, NVIDIA CORPORATION.  All rights reserved.
 
 #include <linux/clk.h>
 #include <linux/device.h>
@@ -712,11 +712,6 @@ MUX_ENUM_CTRL_DECL_234(t234_asrc15_tx, 0x68);
 MUX_ENUM_CTRL_DECL_234(t234_asrc16_tx, 0x69);
 MUX_ENUM_CTRL_DECL_234(t234_asrc17_tx, 0x6a);
 
-/*
- * The number of entries in, and order of, this array is closely tied to the
- * calculation of tegra210_ahub_codec.num_dapm_widgets near the end of
- * tegra210_ahub_probe()
- */
 static const struct snd_soc_dapm_widget tegra210_ahub_widgets[] = {
 	WIDGETS("ADMAIF1", t210_admaif1_tx),
 	WIDGETS("ADMAIF2", t210_admaif2_tx),
@@ -1092,11 +1087,6 @@ static const struct snd_soc_dapm_widget tegra234_ahub_widgets[] = {
 	{ name " XBAR-Capture",		NULL,	name " XBAR-TX" },      \
 	{ name " Capture",		NULL,	name " XBAR-Capture" },
 
-/*
- * The number of entries in, and order of, this array is closely tied to the
- * calculation of tegra210_ahub_codec.num_dapm_routes near the end of
- * tegra210_ahub_probe()
- */
 static const struct snd_soc_dapm_route tegra210_ahub_routes[] = {
 	TEGRA_FE_ROUTES("ADMAIF1")
 	TEGRA_FE_ROUTES("ADMAIF2")
@@ -1329,7 +1319,7 @@ static const struct of_device_id tegra_ahub_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, tegra_ahub_of_match);
 
-static int __maybe_unused tegra_ahub_runtime_suspend(struct device *dev)
+static int tegra_ahub_runtime_suspend(struct device *dev)
 {
 	struct tegra_ahub *ahub = dev_get_drvdata(dev);
 
@@ -1341,7 +1331,7 @@ static int __maybe_unused tegra_ahub_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused tegra_ahub_runtime_resume(struct device *dev)
+static int tegra_ahub_runtime_resume(struct device *dev)
 {
 	struct tegra_ahub *ahub = dev_get_drvdata(dev);
 	int err;
@@ -1401,27 +1391,26 @@ static int tegra_ahub_probe(struct platform_device *pdev)
 		return err;
 	}
 
-	err = of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
-	if (err)
-		return err;
-
 	pm_runtime_enable(&pdev->dev);
+
+	err = of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
+	if (err) {
+		pm_runtime_disable(&pdev->dev);
+		return err;
+	}
 
 	return 0;
 }
 
-static int tegra_ahub_remove(struct platform_device *pdev)
+static void tegra_ahub_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
-
-	return 0;
 }
 
 static const struct dev_pm_ops tegra_ahub_pm_ops = {
-	SET_RUNTIME_PM_OPS(tegra_ahub_runtime_suspend,
-			   tegra_ahub_runtime_resume, NULL)
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
+	RUNTIME_PM_OPS(tegra_ahub_runtime_suspend,
+		       tegra_ahub_runtime_resume, NULL)
+	SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 };
 
 static struct platform_driver tegra_ahub_driver = {
@@ -1430,7 +1419,7 @@ static struct platform_driver tegra_ahub_driver = {
 	.driver = {
 		.name = "tegra210-ahub",
 		.of_match_table = tegra_ahub_of_match,
-		.pm = &tegra_ahub_pm_ops,
+		.pm = pm_ptr(&tegra_ahub_pm_ops),
 	},
 };
 module_platform_driver(tegra_ahub_driver);

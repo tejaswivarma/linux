@@ -440,7 +440,7 @@ static inline void finish_buffer(struct em28xx *dev,
 }
 
 /*
- * Copy picture data from USB buffer to videobuf buffer
+ * Copy picture data from USB buffer to video buffer
  */
 static void em28xx_copy_video(struct em28xx *dev,
 			      struct em28xx_buffer *buf,
@@ -521,7 +521,7 @@ static void em28xx_copy_video(struct em28xx *dev,
 }
 
 /*
- * Copy VBI data from USB buffer to videobuf buffer
+ * Copy VBI data from USB buffer to video buffer
  */
 static void em28xx_copy_vbi(struct em28xx *dev,
 			    struct em28xx_buffer *buf,
@@ -1229,8 +1229,6 @@ static const struct vb2_ops em28xx_video_qops = {
 	.buf_queue      = buffer_queue,
 	.start_streaming = em28xx_start_analog_streaming,
 	.stop_streaming = em28xx_stop_streaming,
-	.wait_prepare   = vb2_ops_wait_prepare,
-	.wait_finish    = vb2_ops_wait_finish,
 };
 
 static int em28xx_vb2_setup(struct em28xx *dev)
@@ -1607,7 +1605,8 @@ static int vidioc_g_parm(struct file *file, void *priv,
 	p->parm.capture.capability = V4L2_CAP_TIMEPERFRAME;
 	if (dev->is_webcam) {
 		rc = v4l2_device_call_until_err(&v4l2->v4l2_dev, 0,
-						video, g_frame_interval, &ival);
+						pad, get_frame_interval, NULL,
+						&ival);
 		if (!rc)
 			p->parm.capture.timeperframe = ival.interval;
 	} else {
@@ -1639,7 +1638,8 @@ static int vidioc_s_parm(struct file *file, void *priv,
 	p->parm.capture.readbuffers = EM28XX_MIN_BUF;
 	p->parm.capture.capability = V4L2_CAP_TIMEPERFRAME;
 	rc = v4l2_device_call_until_err(&dev->v4l2->v4l2_dev, 0,
-					video, s_frame_interval, &ival);
+					pad, set_frame_interval, NULL,
+					&ival);
 	if (!rc)
 		p->parm.capture.timeperframe = ival.interval;
 	return rc;

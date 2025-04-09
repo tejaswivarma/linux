@@ -2,17 +2,17 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <linux/string.h>
-/* For the CLR_() macros */
-#include <pthread.h>
 
 #include <sched.h>
 #include <perf/mmap.h>
+#include "event.h"
 #include "evlist.h"
 #include "evsel.h"
 #include "debug.h"
 #include "record.h"
 #include "tests.h"
 #include "util/mmap.h"
+#include "util/sample.h"
 
 static int sched__get_first_possible_cpu(pid_t pid, cpu_set_t *maskp)
 {
@@ -70,6 +70,7 @@ static int test__PERF_RECORD(struct test_suite *test __maybe_unused, int subtest
 	int total_events = 0, nr_events[PERF_RECORD_MAX] = { 0, };
 	char sbuf[STRERR_BUFSIZE];
 
+	perf_sample__init(&sample, /*all=*/false);
 	if (evlist == NULL) /* Fallback for kernels lacking PERF_COUNT_SW_DUMMY */
 		evlist = evlist__new_default();
 
@@ -330,9 +331,10 @@ found_exit:
 out_delete_evlist:
 	evlist__delete(evlist);
 out:
+	perf_sample__exit(&sample);
 	if (err == -EACCES)
 		return TEST_SKIP;
-	if (err < 0)
+	if (err < 0 || errs != 0)
 		return TEST_FAIL;
 	return TEST_OK;
 }

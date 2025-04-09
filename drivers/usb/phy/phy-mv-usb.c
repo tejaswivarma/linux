@@ -15,6 +15,7 @@
 #include <linux/clk.h>
 #include <linux/workqueue.h>
 #include <linux/platform_device.h>
+#include <linux/string_choices.h>
 
 #include <linux/usb.h>
 #include <linux/usb/ch9.h>
@@ -109,7 +110,7 @@ static int mv_otg_cancel_timer(struct mv_otg *mvotg, unsigned int id)
 	timer = &mvotg->otg_ctrl.timer[id];
 
 	if (timer_pending(timer))
-		del_timer(timer);
+		timer_delete(timer);
 
 	return 0;
 }
@@ -217,7 +218,7 @@ static void mv_otg_start_periphrals(struct mv_otg *mvotg, int on)
 	if (!otg->gadget)
 		return;
 
-	dev_info(mvotg->phy.dev, "gadget %s\n", on ? "on" : "off");
+	dev_info(mvotg->phy.dev, "gadget %s\n", str_on_off(on));
 
 	if (on)
 		usb_gadget_vbus_connect(otg->gadget);
@@ -644,7 +645,7 @@ static const struct attribute_group *mv_otg_groups[] = {
 	NULL,
 };
 
-static int mv_otg_remove(struct platform_device *pdev)
+static void mv_otg_remove(struct platform_device *pdev)
 {
 	struct mv_otg *mvotg = platform_get_drvdata(pdev);
 
@@ -654,8 +655,6 @@ static int mv_otg_remove(struct platform_device *pdev)
 	mv_otg_disable(mvotg);
 
 	usb_remove_phy(&mvotg->phy);
-
-	return 0;
 }
 
 static int mv_otg_probe(struct platform_device *pdev)

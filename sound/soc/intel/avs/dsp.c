@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //
-// Copyright(c) 2021-2022 Intel Corporation. All rights reserved.
+// Copyright(c) 2021-2022 Intel Corporation
 //
 // Authors: Cezary Rojewski <cezary.rojewski@intel.com>
 //          Amadeusz Slawinski <amadeuszx.slawinski@linux.intel.com>
 //
 
+#include <linux/string_choices.h>
 #include <sound/hdaudio_ext.h>
 #include "avs.h"
 #include "registers.h"
@@ -39,7 +40,7 @@ int avs_dsp_core_power(struct avs_dev *adev, u32 core_mask, bool power)
 				       AVS_ADSPCS_TIMEOUT_US);
 	if (ret)
 		dev_err(adev->dev, "core_mask %d power %s failed: %d\n",
-			core_mask, power ? "on" : "off", ret);
+			core_mask, str_on_off(power), ret);
 
 	return ret;
 }
@@ -225,7 +226,7 @@ err:
 
 int avs_dsp_init_module(struct avs_dev *adev, u16 module_id, u8 ppl_instance_id,
 			u8 core_id, u8 domain, void *param, u32 param_size,
-			u16 *instance_id)
+			u8 *instance_id)
 {
 	struct avs_module_entry mentry;
 	bool was_loaded = false;
@@ -272,7 +273,7 @@ err_mod_entry:
 	return ret;
 }
 
-void avs_dsp_delete_module(struct avs_dev *adev, u16 module_id, u16 instance_id,
+void avs_dsp_delete_module(struct avs_dev *adev, u16 module_id, u8 instance_id,
 			   u8 ppl_instance_id, u8 core_id)
 {
 	struct avs_module_entry mentry;

@@ -30,6 +30,11 @@ properties:
       Clock controller node that provides the clocks controlled by the SCU
     $ref: /schemas/clock/fsl,scu-clk.yaml
 
+  gpio:
+    description:
+      Control the GPIO PINs on SCU domain over the firmware APIs
+    $ref: /schemas/gpio/fsl,imx8qxp-sc-gpio.yaml
+
   ocotp:
     description:
       OCOTP controller node provided by the SCU
@@ -39,6 +44,18 @@ properties:
     description:
       Keys provided by the SCU
     $ref: /schemas/input/fsl,scu-key.yaml
+
+  reset-controller:
+    type: object
+    properties:
+      compatible:
+        const: fsl,imx-scu-reset
+      '#reset-cells':
+        const: 1
+    required:
+      - compatible
+      - '#reset-cells'
+    additionalProperties: false
 
   mboxes:
     description:

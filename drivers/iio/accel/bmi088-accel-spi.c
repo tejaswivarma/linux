@@ -2,6 +2,8 @@
 /*
  * 3-axis accelerometer driver supporting following Bosch-Sensortec chips:
  *  - BMI088
+ *  - BMI085
+ *  - BMI090L
  *
  * Copyright (c) 2018-2020, Topic Embedded Products
  */
@@ -34,7 +36,7 @@ static int bmi088_regmap_spi_read(void *context, const void *reg,
 	return spi_write_then_read(spi, addr, sizeof(addr), val, val_size);
 }
 
-static struct regmap_bus bmi088_regmap_bus = {
+static const struct regmap_bus bmi088_regmap_bus = {
 	.write = bmi088_regmap_spi_write,
 	.read = bmi088_regmap_spi_read,
 };
@@ -80,7 +82,7 @@ MODULE_DEVICE_TABLE(spi, bmi088_accel_id);
 static struct spi_driver bmi088_accel_driver = {
 	.driver = {
 		.name	= "bmi088_accel_spi",
-		.pm	= &bmi088_accel_pm_ops,
+		.pm	= pm_ptr(&bmi088_accel_pm_ops),
 		.of_match_table = bmi088_of_match,
 	},
 	.probe		= bmi088_accel_probe,
@@ -92,4 +94,4 @@ module_spi_driver(bmi088_accel_driver);
 MODULE_AUTHOR("Niek van Agt <niek.van.agt@topicproducts.com>");
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("BMI088 accelerometer driver (SPI)");
-MODULE_IMPORT_NS(IIO_BMI088);
+MODULE_IMPORT_NS("IIO_BMI088");

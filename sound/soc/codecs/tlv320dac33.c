@@ -1477,10 +1477,8 @@ static int dac33_i2c_probe(struct i2c_client *client)
 	if (dac33 == NULL)
 		return -ENOMEM;
 
-	dac33->reg_cache = devm_kmemdup(&client->dev,
-					dac33_reg,
-					ARRAY_SIZE(dac33_reg) * sizeof(u8),
-					GFP_KERNEL);
+	dac33->reg_cache = devm_kmemdup_array(&client->dev, dac33_reg, ARRAY_SIZE(dac33_reg),
+					      sizeof(dac33_reg[0]), GFP_KERNEL);
 	if (!dac33->reg_cache)
 		return -ENOMEM;
 
@@ -1536,7 +1534,7 @@ err_gpio:
 	return ret;
 }
 
-static int dac33_i2c_remove(struct i2c_client *client)
+static void dac33_i2c_remove(struct i2c_client *client)
 {
 	struct tlv320dac33_priv *dac33 = i2c_get_clientdata(client);
 
@@ -1545,8 +1543,6 @@ static int dac33_i2c_remove(struct i2c_client *client)
 
 	if (dac33->power_gpio >= 0)
 		gpio_free(dac33->power_gpio);
-
-	return 0;
 }
 
 static const struct i2c_device_id tlv320dac33_i2c_id[] = {
@@ -1562,7 +1558,7 @@ static struct i2c_driver tlv320dac33_i2c_driver = {
 	.driver = {
 		.name = "tlv320dac33-codec",
 	},
-	.probe_new	= dac33_i2c_probe,
+	.probe		= dac33_i2c_probe,
 	.remove		= dac33_i2c_remove,
 	.id_table	= tlv320dac33_i2c_id,
 };

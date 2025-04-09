@@ -555,7 +555,7 @@ static const struct snd_kcontrol_new twl4030_dapm_dbypassv_control =
  * On unmute: restore the register content from the reg_cache
  * Outputs handled in this way:  Earpiece, PreDrivL/R, CarkitL/R
  */
-#define TWL4030_OUTPUT_PGA(pin_name, reg, mask)				\
+#define TWL4030_OUTPUT_PGA(pin_name, reg)				\
 static int pin_name##pga_event(struct snd_soc_dapm_widget *w,		\
 			       struct snd_kcontrol *kcontrol, int event) \
 {									\
@@ -575,11 +575,11 @@ static int pin_name##pga_event(struct snd_soc_dapm_widget *w,		\
 	return 0;							\
 }
 
-TWL4030_OUTPUT_PGA(earpiece, TWL4030_REG_EAR_CTL, TWL4030_EAR_GAIN);
-TWL4030_OUTPUT_PGA(predrivel, TWL4030_REG_PREDL_CTL, TWL4030_PREDL_GAIN);
-TWL4030_OUTPUT_PGA(predriver, TWL4030_REG_PREDR_CTL, TWL4030_PREDR_GAIN);
-TWL4030_OUTPUT_PGA(carkitl, TWL4030_REG_PRECKL_CTL, TWL4030_PRECKL_GAIN);
-TWL4030_OUTPUT_PGA(carkitr, TWL4030_REG_PRECKR_CTL, TWL4030_PRECKR_GAIN);
+TWL4030_OUTPUT_PGA(earpiece, TWL4030_REG_EAR_CTL);
+TWL4030_OUTPUT_PGA(predrivel, TWL4030_REG_PREDL_CTL);
+TWL4030_OUTPUT_PGA(predriver, TWL4030_REG_PREDR_CTL);
+TWL4030_OUTPUT_PGA(carkitl, TWL4030_REG_PRECKL_CTL);
+TWL4030_OUTPUT_PGA(carkitr, TWL4030_REG_PRECKR_CTL);
 
 static void handsfree_ramp(struct snd_soc_component *component, int reg, int ramp)
 {
@@ -700,8 +700,10 @@ static void headset_ramp(struct snd_soc_component *component, int ramp)
 	struct twl4030_priv *twl4030 = snd_soc_component_get_drvdata(component);
 	struct twl4030_board_params *board_params = twl4030->board_params;
 	/* Base values for ramp delay calculation: 2^19 - 2^26 */
-	unsigned int ramp_base[] = {524288, 1048576, 2097152, 4194304,
-				    8388608, 16777216, 33554432, 67108864};
+	static const unsigned int ramp_base[] = {
+		524288, 1048576, 2097152, 4194304,
+		8388608, 16777216, 33554432, 67108864
+	};
 	unsigned int delay;
 
 	hs_gain = twl4030_read(component, TWL4030_REG_HS_GAIN_SET);
@@ -2047,7 +2049,7 @@ static int twl4030_voice_set_dai_fmt(struct snd_soc_dai *codec_dai,
 	case SND_SOC_DAIFMT_CBP_CFP:
 		format &= ~(TWL4030_VIF_SLAVE_EN);
 		break;
-	case SND_SOC_DAIFMT_CBS_CFS:
+	case SND_SOC_DAIFMT_CBC_CFC:
 		format |= TWL4030_VIF_SLAVE_EN;
 		break;
 	default:
